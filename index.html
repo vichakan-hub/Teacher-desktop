@@ -6179,6 +6179,78 @@ tbody tr:hover td{
   color:#b26a00;
 }
 
+.exam-eligibility-head-title{
+  margin-bottom:5px;
+  font-weight:900;
+}
+
+.exam-eligibility-head-max{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  color:#573a1f;
+  font-size:12px;
+  font-weight:800;
+}
+
+#examEligibilityOverlay
+.exam-eligibility-max-input{
+  width:64px !important;
+  height:31px !important;
+  padding:0 6px !important;
+
+  border:1px solid #d6b98b !important;
+  border-radius:10px !important;
+
+  background:#ffffff !important;
+
+  font-family:'Sarabun',sans-serif !important;
+  font-size:15px !important;
+  font-weight:900 !important;
+  text-align:center !important;
+}
+
+#examEligibilityOverlay
+.exam-eligibility-max-input:focus{
+  border-color:#f59e0b !important;
+  box-shadow:0 0 0 3px rgba(245,158,11,.14) !important;
+}
+
+#examEligibilityOverlay
+.exam-eligibility-attendance-input{
+  width:88px !important;
+  height:38px !important;
+
+  padding:0 8px !important;
+
+  border:1.5px solid #bfd0e2 !important;
+  border-radius:13px !important;
+
+  background:#ffffff !important;
+  color:#17263c !important;
+
+  font-family:'Sarabun',sans-serif !important;
+  font-size:18px !important;
+  font-weight:900 !important;
+  text-align:center !important;
+}
+
+#examEligibilityOverlay
+.exam-eligibility-attendance-input:focus{
+  border-color:#2563eb !important;
+  box-shadow:0 0 0 4px rgba(37,99,235,.12) !important;
+}
+
+#examEligibilityOverlay
+.exam-eligibility-attendance-input.invalid,
+#examEligibilityOverlay
+.exam-eligibility-max-input.invalid{
+  border-color:#d92d20 !important;
+  background:#fff0ef !important;
+  box-shadow:0 0 0 3px rgba(217,45,32,.08) !important;
+}
+
 
 /* =====================================================
    STATUS BADGE
@@ -11840,9 +11912,30 @@ td{
               ชื่อ - สกุล
             </th>
 
-            <th style="width:130px;">
-              เวลาเรียน
-            </th>
+<th style="width:155px;">
+
+  <div class="exam-eligibility-head-title">
+    เวลาเรียน
+  </div>
+
+  <div class="exam-eligibility-head-max">
+
+    <span>เต็ม</span>
+
+    <input
+      id="examEligibilityAttendanceMaxInput"
+      class="exam-eligibility-max-input"
+      type="number"
+      min="0"
+      step="0.01"
+      inputmode="decimal"
+      placeholder="0"
+      autocomplete="off"
+    >
+
+  </div>
+
+</th>
 
             <th style="width:125px;">
               % เวลาเรียน
@@ -11886,8 +11979,9 @@ td{
     <div class="exam-eligibility-overlay-footer">
 
       <div class="exam-eligibility-footer-note">
-        ระบบแสดงข้อมูลเวลาเรียนจากรายงานผลกลางภาค
-        โดยไม่กำหนด มส ให้อัตโนมัติ ครูเป็นผู้พิจารณาและกดส่ง มส
+กรอกเวลาเรียนล่าสุดของนักเรียน
+ระบบจะคำนวณเปอร์เซ็นต์และแจ้งเตือนผู้ที่มีเวลาเรียนต่ำกว่า 80%
+โดยครูเป็นผู้พิจารณาและกดส่ง มส ด้วยตนเอง
       </div>
 
 
@@ -28575,16 +28669,20 @@ function closeExamEligibilityOverlay(){
     '';
 
 
-  state.examEligibilityRows =
-    [];
+state.examEligibilityRows =
+  [];
 
 
-  state.examEligibilityDirty =
-    false;
+state.examEligibilityDirty =
+  false;
 
 
-  state.selectedExamEligibilityGroup =
-    null;
+state.examEligibilityAttendanceMax =
+  null;
+
+
+state.selectedExamEligibilityGroup =
+  null;
 
 }
 
@@ -28610,6 +28708,9 @@ async function openExamEligibilityReport(
     state.examEligibilityDirty =
       false;
 
+  state.examEligibilityAttendanceMax =
+  null;
+syncExamEligibilityAttendanceMaxInput();
 
     /* =====================================================
        แสดงหัวข้อ
@@ -28679,11 +28780,11 @@ async function openExamEligibilityReport(
     `;
 
 
-    setStatus(
-      'examEligibilityFormStatus',
-      'กำลังโหลดรายชื่อนักเรียนและเวลาเรียนจากรายงานผลกลางภาค...',
-      'info'
-    );
+setStatus(
+  'examEligibilityFormStatus',
+  'กำลังโหลดรายชื่อนักเรียนจากรายงานผลกลางภาค...',
+  'info'
+);
 
 
     /*
@@ -28906,6 +29007,7 @@ state.examEligibilityAttendanceMax =
       )
     : null;
 
+    syncExamEligibilityAttendanceMaxInput();
 
     /* =====================================================
        3. สร้างข้อมูลหน้า มส
@@ -28987,11 +29089,7 @@ sourceRows.map(report => {
         : 'eligible'
 
   };
-
 })
-
-        })
-
       );
 
 
@@ -29043,6 +29141,343 @@ setStatus(
       'โหลดข้อมูลนักเรียนไม่สำเร็จ',
       'error'
     );
+
+  }
+
+}
+
+/* =====================================================
+   EXAM ELIGIBILITY ATTENDANCE
+   เวลาเรียนล่าสุด
+   ===================================================== */
+
+function calculateExamEligibilityAttendancePercent(
+  score,
+  max
+){
+
+  const scoreValue =
+    safeNum(score);
+
+  const maxValue =
+    safeNum(max);
+
+
+  if(
+    scoreValue === null ||
+    maxValue === null ||
+    !Number.isFinite(scoreValue) ||
+    !Number.isFinite(maxValue) ||
+    scoreValue < 0 ||
+    maxValue <= 0
+  ){
+    return null;
+  }
+
+
+  return (
+    scoreValue /
+    maxValue
+  ) * 100;
+
+}
+
+
+function syncExamEligibilityAttendanceMaxInput(){
+
+  const input =
+    el(
+      'examEligibilityAttendanceMaxInput'
+    );
+
+
+  if(!input){
+    return;
+  }
+
+
+  const max =
+    safeNum(
+      state.examEligibilityAttendanceMax
+    );
+
+
+  input.value =
+    max === null
+      ? ''
+      : formatPlainNumber(max);
+
+
+  input.classList.toggle(
+    'invalid',
+    max !== null &&
+    max <= 0
+  );
+
+}
+
+
+function handleExamEligibilityAttendanceMaxInput(
+  value
+){
+
+  const raw =
+    String(
+      value ?? ''
+    ).trim();
+
+
+  let max = null;
+
+
+  if(raw !== ''){
+
+    const numberValue =
+      Number(raw);
+
+
+    max =
+      Number.isFinite(numberValue)
+        ? numberValue
+        : null;
+
+  }
+
+
+  state.examEligibilityAttendanceMax =
+    max;
+
+
+  /*
+   * เวลาเรียนเต็มเดียวกันทั้งห้อง
+   */
+  (
+    state.examEligibilityRows ||
+    []
+  ).forEach(row => {
+
+    row.attendance_max =
+      max;
+
+
+    row.attendance_percent =
+      calculateExamEligibilityAttendancePercent(
+        row.attendance_score,
+        max
+      );
+
+  });
+
+
+  state.examEligibilityDirty =
+    true;
+
+
+  const input =
+    el(
+      'examEligibilityAttendanceMaxInput'
+    );
+
+
+  if(input){
+
+    input.classList.toggle(
+      'invalid',
+      max !== null &&
+      max <= 0
+    );
+
+  }
+
+
+  /*
+   * render เฉพาะรายชื่อนักเรียนใหม่
+   * ช่องเวลาเรียนเต็มไม่หาย เพราะอยู่นอก tbody
+   */
+  renderExamEligibilityStudentRows();
+
+
+  setStatus(
+    'examEligibilityFormStatus',
+
+    max !== null &&
+    max > 0
+      ? `กำหนดเวลาเรียนเต็ม ${formatPlainNumber(max)} ชั่วโมง`
+      : 'กรุณากรอกเวลาเรียนเต็ม',
+
+    max !== null &&
+    max > 0
+      ? 'info'
+      : 'warn'
+  );
+
+}
+
+
+function handleExamEligibilityAttendanceInput(
+  index,
+  value,
+  inputElement = null
+){
+
+  const row =
+    state.examEligibilityRows[
+      index
+    ];
+
+
+  if(!row){
+    return;
+  }
+
+
+  const raw =
+    String(
+      value ?? ''
+    ).trim();
+
+
+  let score = null;
+
+
+  if(raw !== ''){
+
+    const numberValue =
+      Number(raw);
+
+
+    score =
+      Number.isFinite(numberValue)
+        ? numberValue
+        : null;
+
+  }
+
+
+  const max =
+    safeNum(
+      state.examEligibilityAttendanceMax
+    );
+
+
+  row.attendance_score =
+    score;
+
+
+  row.attendance_max =
+    max;
+
+
+  row.attendance_percent =
+    calculateExamEligibilityAttendancePercent(
+      score,
+      max
+    );
+
+
+  state.examEligibilityDirty =
+    true;
+
+
+  /*
+   * เวลาเรียนห้ามติดลบ
+   * และห้ามมากกว่าเวลาเรียนเต็ม
+   */
+  const invalid =
+    score !== null &&
+    (
+      score < 0 ||
+      (
+        max !== null &&
+        max > 0 &&
+        score > max
+      )
+    );
+
+
+  if(inputElement){
+
+    inputElement.classList.toggle(
+      'invalid',
+      invalid
+    );
+
+  }
+
+
+  updateExamEligibilityAttendanceRowUI(
+    index
+  );
+
+
+  updateExamEligibilitySummary();
+
+}
+
+
+function updateExamEligibilityAttendanceRowUI(
+  index
+){
+
+  const row =
+    state.examEligibilityRows[
+      index
+    ];
+
+
+  if(!row){
+    return;
+  }
+
+
+  const tr =
+    document.querySelector(
+      `[data-exam-row-index="${index}"]`
+    );
+
+
+  const percentElement =
+    document.querySelector(
+      `[data-exam-attendance-percent-index="${index}"]`
+    );
+
+
+  const percent =
+    safeNum(
+      row.attendance_percent
+    );
+
+
+  const isLow =
+    percent !== null &&
+    percent < 80;
+
+
+  if(tr){
+
+    tr.classList.toggle(
+      'exam-eligibility-low-attendance',
+      isLow
+    );
+
+  }
+
+
+  if(percentElement){
+
+    percentElement.classList.toggle(
+      'low',
+      isLow
+    );
+
+
+    percentElement.textContent =
+      percent === null
+        ? '-'
+        : `${formatDecimal(
+            percent,
+            2
+          )}%`;
 
   }
 
@@ -29138,9 +29573,10 @@ const attendanceMax =
 
 
         return `
-          <tr
-            class="${rowClass}"
-          >
+<tr
+  class="${rowClass}"
+  data-exam-row-index="${index}"
+>
 
             <td class="text-center">
 
@@ -29184,51 +29620,60 @@ const attendanceMax =
             </td>
 
 
+<td class="text-center">
+
+  <input
+    type="number"
+    min="0"
+    step="0.01"
+    inputmode="decimal"
+
+    class="
+      exam-eligibility-attendance-input
+      ${
+        (
+          attendanceScore !== null &&
+          attendanceMax !== null &&
+          attendanceMax > 0 &&
+          attendanceScore > attendanceMax
+        )
+          ? 'invalid'
+          : ''
+      }
+    "
+
+    data-exam-attendance-index="${index}"
+
+    value="${
+      attendanceScore === null
+        ? ''
+        : escapeHtml(
+            formatPlainNumber(
+              attendanceScore
+            )
+          )
+    }"
+
+    placeholder="กรอก"
+    autocomplete="off"
+  >
+
+</td>
+
+
             <td class="text-center">
 
-              <span
-                class="exam-eligibility-attendance-value"
-              >
-
-${
-  attendanceScore === null
-    ? '-'
-    : escapeHtml(
-        formatPlainNumber(
-          attendanceScore
-        )
-      )
-}
-
-/
-
-${
-  attendanceMax === null
-    ? '-'
-    : escapeHtml(
-        formatPlainNumber(
-          attendanceMax
-        )
-      )
-}
-
-              </span>
-
-            </td>
-
-
-            <td class="text-center">
-
-              <span
-                class="
-                  exam-eligibility-attendance-percent
-                  ${
-                    isLowAttendance
-                      ? 'low'
-                      : ''
-                  }
-                "
-              >
+<span
+  class="
+    exam-eligibility-attendance-percent
+    ${
+      isLowAttendance
+        ? 'low'
+        : ''
+    }
+  "
+  data-exam-attendance-percent-index="${index}"
+>
 
 ${
   attendancePercent === null
@@ -29330,6 +29775,37 @@ ${
       );
 
     });
+
+  /*
+ * Event ช่องกรอกเวลาเรียนล่าสุด
+ */
+tbody
+  .querySelectorAll(
+    '[data-exam-attendance-index]'
+  )
+  .forEach(input => {
+
+    input.addEventListener(
+      'input',
+      () => {
+
+        const index =
+          Number(
+            input.dataset
+              .examAttendanceIndex
+          );
+
+
+        handleExamEligibilityAttendanceInput(
+          index,
+          input.value,
+          input
+        );
+
+      }
+    );
+
+  });
 
 
   updateExamEligibilitySummary();
@@ -38205,6 +38681,18 @@ bindIfExists(
   'examEligibilityCancelBtn',
   'click',
   closeExamEligibilityOverlay
+);
+
+  bindIfExists(
+  'examEligibilityAttendanceMaxInput',
+  'input',
+  event => {
+
+    handleExamEligibilityAttendanceMaxInput(
+      event.target.value
+    );
+
+  }
 );
 
 
