@@ -5725,6 +5725,41 @@
   transform:translateY(-1px);
 }
 
+/* เคยบันทึกรายงาน มส แล้ว */
+#pageExamEligibility
+.exam-eligibility-report-btn.edit{
+
+  border-color:#86d49f;
+
+  background:
+    linear-gradient(
+      135deg,
+      #0f9d58,
+      #22c55e
+    );
+
+  color:#ffffff;
+
+  box-shadow:
+    0 7px 16px
+    rgba(15,157,88,.18);
+}
+
+
+#pageExamEligibility
+.exam-eligibility-report-btn.edit:hover{
+
+  background:
+    linear-gradient(
+      135deg,
+      #0d8c4f,
+      #1fb455
+    );
+
+  transform:translateY(-1px);
+
+}
+
 
 #pageExamEligibility .exam-eligibility-disabled-btn{
   width:130px;
@@ -27385,55 +27420,208 @@ async function loadExamEligibilityTeachingList(){
 
       });
 
+    /* =====================================================
+   ตรวจรายวิชา/ห้องที่เคยบันทึกรายงาน มส แล้ว
+   ===================================================== */
+
+const eligibilityRows =
+  await fetchAllPages(
+    () => {
+
+      return supabaseClient
+        .from(
+          'exam_eligibility_reports'
+        )
+        .select(`
+          academic_year,
+          term,
+          subject_code,
+          teacher_code,
+          class_level,
+          room,
+          student_code,
+          exam_status
+        `)
+        .eq(
+          'academic_year',
+          Number(year)
+        )
+        .eq(
+          'term',
+          Number(term)
+        )
+        .eq(
+          'teacher_code',
+          state.currentUser
+            .teacher_code
+        );
+
+    },
+    1000
+  );
+
+
+/*
+ * Map:
+ * key รายวิชา/ห้อง
+ * -> จำนวนที่รายงานทั้งหมด
+ * -> จำนวน มส
+ */
+const eligibilityReportMap =
+  new Map();
+
+
+(eligibilityRows || [])
+  .forEach(row => {
+
+    const key =
+      getMidtermReportGroupKey(
+        row
+      );
+
+
+    if(
+      !eligibilityReportMap.has(
+        key
+      )
+    ){
+
+      eligibilityReportMap.set(
+        key,
+        {
+          studentCodes:
+            new Set(),
+
+          msStudentCodes:
+            new Set()
+        }
+      );
+
+    }
+
+
+    const item =
+      eligibilityReportMap.get(
+        key
+      );
+
+
+    const studentCode =
+      normalizeMidtermRosterStudentCode(
+        row.student_code
+      );
+
+
+    if(!studentCode){
+      return;
+    }
+
+
+    item.studentCodes.add(
+      studentCode
+    );
+
+
+    if(
+      row.exam_status ===
+      'ms'
+    ){
+
+      item.msStudentCodes.add(
+        studentCode
+      );
+
+    }
+
+  });
 
     /* =====================================================
        จัดกลุ่มรายการสอน
        ===================================================== */
 
-    const groups =
-      groupMidtermOfferings(
-        visibleRows
-      )
-      .map(group => {
+const groups =
+  groupMidtermOfferings(
+    visibleRows
+  )
+  .map(group => {
 
-        const key =
-          getMidtermReportGroupKey(
-            group
-          );
-
-
-        const studentCodes =
-          studentMap.get(key) ||
-          new Set();
+    const key =
+      getMidtermReportGroupKey(
+        group
+      );
 
 
-        const reportCount =
-          studentCodes.size;
+    /* =========================
+       ข้อมูลกลางภาค
+       ========================= */
+
+    const studentCodes =
+      studentMap.get(key) ||
+      new Set();
 
 
-        const hasMidtermReports =
-          reportCount > 0;
+    const reportCount =
+      studentCodes.size;
 
 
-        const hasNoStudents =
-          !hasMidtermReports &&
-          noStudentsSet.has(key);
+    const hasMidtermReports =
+      reportCount > 0;
 
 
-        return {
-          ...group,
+    const hasNoStudents =
+      !hasMidtermReports &&
+      noStudentsSet.has(key);
 
-          midterm_report_count:
-            reportCount,
 
-          has_midterm_reports:
-            hasMidtermReports,
+    /* =========================
+       ข้อมูลรายงาน มส
+       ========================= */
 
-          has_no_students_declaration:
-            hasNoStudents
-        };
+    const eligibilityInfo =
+      eligibilityReportMap.get(
+        key
+      );
 
-      });
+
+    const eligibilityReportCount =
+      eligibilityInfo
+        ?.studentCodes
+        ?.size || 0;
+
+
+    const eligibilityMsCount =
+      eligibilityInfo
+        ?.msStudentCodes
+        ?.size || 0;
+
+
+    const hasEligibilityReport =
+      eligibilityReportCount > 0;
+
+
+    return {
+      ...group,
+
+      midterm_report_count:
+        reportCount,
+
+      has_midterm_reports:
+        hasMidtermReports,
+
+      has_no_students_declaration:
+        hasNoStudents,
+
+      exam_eligibility_report_count:
+        eligibilityReportCount,
+
+      exam_eligibility_ms_count:
+        eligibilityMsCount,
+
+      has_exam_eligibility_report:
+        hasEligibilityReport
+    };
+
+  });
 
 
     state.examEligibilityGroups =
@@ -27550,6 +27738,23 @@ function renderExamEligibilityTeachingRows(
         row.has_no_students_declaration ===
         true;
 
+      const hasEligibilityReport =
+  row.has_exam_eligibility_report ===
+  true;
+
+
+const eligibilityReportCount =
+  Number(
+    row.exam_eligibility_report_count ||
+    0
+  );
+
+
+const eligibilityMsCount =
+  Number(
+    row.exam_eligibility_ms_count ||
+    0
+  );
 
       let actionHtml = '';
 
@@ -27558,33 +27763,87 @@ function renderExamEligibilityTeachingRows(
        * มีข้อมูลกลางภาคแล้ว
        * พร้อมรายงาน มส
        */
-      if(hasMidtermReports){
+if(hasMidtermReports){
 
-        actionHtml = `
-          <button
-            class="exam-eligibility-report-btn"
-            type="button"
-            data-exam-eligibility-index="${index}"
-          >
-            🚫 รายงาน มส
-          </button>
+  /*
+   * เคยบันทึกรายงาน มส แล้ว
+   */
+  if(hasEligibilityReport){
 
-          <div
-            class="small"
-            style="margin-top:5px;"
-          >
-            ข้อมูลกลางภาค
-            ${escapeHtml(
-              String(
-                row.midterm_report_count ||
-                0
-              )
-            )}
-            คน
-          </div>
-        `;
+    actionHtml = `
+      <button
+        class="
+          exam-eligibility-report-btn
+          edit
+        "
+        type="button"
+        data-exam-eligibility-index="${index}"
+      >
+        ✏️ แก้ไขรายงาน มส
+      </button>
 
-      }
+      <div
+        class="small"
+        style="
+          margin-top:5px;
+          color:#08783f;
+          font-weight:700;
+        "
+      >
+        รายงานแล้ว
+        ${escapeHtml(
+          String(
+            eligibilityReportCount
+          )
+        )}
+        คน
+
+        • มส
+        ${escapeHtml(
+          String(
+            eligibilityMsCount
+          )
+        )}
+        คน
+      </div>
+    `;
+
+  }
+
+
+  /*
+   * มีรายชื่อนักเรียนแล้ว
+   * แต่ยังไม่เคยรายงาน มส
+   */
+  else{
+
+    actionHtml = `
+      <button
+        class="exam-eligibility-report-btn"
+        type="button"
+        data-exam-eligibility-index="${index}"
+      >
+        🚫 รายงาน มส
+      </button>
+
+      <div
+        class="small"
+        style="margin-top:5px;"
+      >
+        ข้อมูลกลางภาค
+        ${escapeHtml(
+          String(
+            row.midterm_report_count ||
+            0
+          )
+        )}
+        คน
+      </div>
+    `;
+
+  }
+
+}
 
 
       /*
@@ -37376,6 +37635,12 @@ async function saveExamEligibilityReport(){
 
       'success'
     );
+
+    /*
+ * Refresh รายการสอนด้านหลัง Overlay
+ * เพื่อเปลี่ยนปุ่มเป็น "แก้ไขรายงาน มส"
+ */
+await loadExamEligibilityTeachingList();
 
 
   }catch(error){
