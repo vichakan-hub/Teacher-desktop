@@ -28892,7 +28892,18 @@ setStatus(
 
       renderExamEligibilityStudentRows();
 
+if(
+  el(
+    'saveExamEligibilityBtn'
+  )
+){
 
+  el(
+    'saveExamEligibilityBtn'
+  ).disabled =
+    true;
+
+}
       setStatus(
         'examEligibilityFormStatus',
         'ไม่พบข้อมูลรายงานผลกลางภาคของรายวิชานี้',
@@ -29093,10 +29104,24 @@ sourceRows.map(report => {
       );
 
 
-    renderExamEligibilityStudentRows();
+renderExamEligibilityStudentRows();
 
 
-   const hasSavedAttendance =
+if(
+  el(
+    'saveExamEligibilityBtn'
+  )
+){
+
+  el(
+    'saveExamEligibilityBtn'
+  ).disabled =
+    false;
+
+}
+
+
+const hasSavedAttendance =
   state.examEligibilityRows
     .some(row =>
       safeNum(
@@ -29133,6 +29158,19 @@ setStatus(
 
 
     renderExamEligibilityStudentRows();
+
+    if(
+  el(
+    'saveExamEligibilityBtn'
+  )
+){
+
+  el(
+    'saveExamEligibilityBtn'
+  ).disabled =
+    true;
+
+}
 
 
     setStatus(
@@ -35308,6 +35346,430 @@ async function submitChangePassword(event){
     }
   }
 }
+
+/* =====================================================
+   SAVE EXAM ELIGIBILITY REPORT
+   บันทึกเวลาเรียนล่าสุด + สถานะ มส
+   ===================================================== */
+
+async function saveExamEligibilityReport(){
+
+  const saveButton =
+    el('saveExamEligibilityBtn');
+
+  try{
+
+    const group =
+      state.selectedExamEligibilityGroup;
+
+    const rows =
+      state.examEligibilityRows || [];
+
+    const attendanceMax =
+      safeNum(
+        state.examEligibilityAttendanceMax
+      );
+
+
+    /* =========================
+       ตรวจข้อมูลพื้นฐาน
+       ========================= */
+
+    if(!group){
+      throw new Error(
+        'ไม่พบรายวิชาที่ต้องการบันทึก'
+      );
+    }
+
+
+    if(
+      !state.currentUser ||
+      !state.currentUser.teacher_code
+    ){
+      throw new Error(
+        'ไม่พบรหัสครูผู้สอน'
+      );
+    }
+
+
+    if(!rows.length){
+      throw new Error(
+        'ไม่มีข้อมูลนักเรียนสำหรับบันทึก'
+      );
+    }
+
+
+    if(
+      attendanceMax === null ||
+      attendanceMax <= 0
+    ){
+
+      const maxInput =
+        el(
+          'examEligibilityAttendanceMaxInput'
+        );
+
+      maxInput?.classList.add(
+        'invalid'
+      );
+
+      throw new Error(
+        'กรุณากรอกเวลาเรียนเต็มให้ถูกต้อง'
+      );
+
+    }
+
+
+    /* =========================
+       ตรวจเวลาเรียนรายคน
+       ========================= */
+
+    const emptyAttendanceRows =
+      rows.filter(row =>
+        safeNum(
+          row.attendance_score
+        ) === null
+      );
+
+
+    if(emptyAttendanceRows.length){
+
+      throw new Error(
+        `กรุณากรอกเวลาเรียนให้ครบทุกคน ` +
+        `ยังขาด ${emptyAttendanceRows.length} คน`
+      );
+
+    }
+
+
+    const invalidAttendanceRows =
+      rows.filter(row => {
+
+        const score =
+          safeNum(
+            row.attendance_score
+          );
+
+        return (
+          score === null ||
+          score < 0 ||
+          score > attendanceMax
+        );
+
+      });
+
+
+    if(invalidAttendanceRows.length){
+
+      throw new Error(
+        `พบเวลาเรียนไม่ถูกต้อง ${invalidAttendanceRows.length} คน ` +
+        `(เวลาเรียนต้องอยู่ระหว่าง 0 ถึง ${formatPlainNumber(attendanceMax)})`
+      );
+
+    }
+
+
+    /* =========================
+       เตรียม UI
+       ========================= */
+
+    if(saveButton){
+
+      saveButton.disabled =
+        true;
+
+      saveButton.innerHTML =
+        '⏳ กำลังบันทึก...';
+
+    }
+
+
+    setStatus(
+      'examEligibilityFormStatus',
+      'กำลังบันทึกรายงานนักเรียนไม่มีสิทธิ์สอบ...',
+      'info'
+    );
+
+
+    /* =========================
+       หา Offering
+       ========================= */
+
+    const firstOffering =
+      group.offerings?.[0] || {};
+
+
+    const nowIso =
+      new Date().toISOString();
+
+
+    /* =========================
+       สร้าง Payload
+       ========================= */
+
+    const payload =
+      rows.map(row => {
+
+        const attendanceScore =
+          safeNum(
+            row.attendance_score
+          );
+
+
+        const attendancePercent =
+          calculateExamEligibilityAttendancePercent(
+            attendanceScore,
+            attendanceMax
+          );
+
+
+        /*
+         * sync state ก่อน save
+         */
+        row.attendance_max =
+          attendanceMax;
+
+        row.attendance_percent =
+          attendancePercent;
+
+
+        return {
+
+          academic_year:
+            Number(
+              group.academic_year
+            ),
+
+          term:
+            Number(
+              group.term
+            ),
+
+
+          subject_offering_id:
+            firstOffering
+              .subject_offering_id ||
+            firstOffering.id ||
+            null,
+
+
+          subject_id:
+            group.subject_id ||
+            firstOffering.subject_id ||
+            null,
+
+
+          teacher_id:
+            state.currentUser.id ||
+            firstOffering.teacher_id ||
+            null,
+
+
+          teacher_code:
+            state.currentUser
+              .teacher_code,
+
+
+          teacher_name:
+            state.currentUser
+              .full_name ||
+            state.currentUser
+              .teacher_name ||
+            firstOffering
+              .teacher_name ||
+            '',
+
+
+          subject_code:
+            group.subject_code ||
+            '',
+
+
+          subject_name:
+            group.subject_name ||
+            '',
+
+
+          class_level:
+            group.class_level ||
+            '',
+
+
+          room:
+            String(
+              group.room || ''
+            ),
+
+
+          student_id:
+            row.student_id ||
+            null,
+
+
+          student_code:
+            row.student_code ||
+            '',
+
+
+          student_no:
+            row.student_no ??
+            null,
+
+
+          student_name:
+            row.student_name ||
+            '',
+
+
+          attendance_score:
+            attendanceScore,
+
+
+          attendance_max:
+            attendanceMax,
+
+
+          attendance_percent:
+            attendancePercent,
+
+
+          exam_status:
+            row.exam_status === 'ms'
+              ? 'ms'
+              : 'eligible',
+
+
+          updated_at:
+            nowIso
+
+        };
+
+      });
+
+
+    /* =========================
+       UPSERT
+       ========================= */
+
+    const {
+      error
+    } =
+      await supabaseClient
+        .from(
+          'exam_eligibility_reports'
+        )
+        .upsert(
+          payload,
+          {
+            onConflict:
+              'academic_year,term,subject_code,teacher_code,class_level,room,student_code'
+          }
+        );
+
+
+    if(error){
+      throw error;
+    }
+
+
+    /* =========================
+       สำเร็จ
+       ========================= */
+
+    state.examEligibilityDirty =
+      false;
+
+
+    renderExamEligibilityStudentRows();
+
+
+    const msCount =
+      rows.filter(row =>
+        row.exam_status === 'ms'
+      ).length;
+
+
+    const lowAttendanceCount =
+      rows.filter(row => {
+
+        const percent =
+          safeNum(
+            row.attendance_percent
+          );
+
+        return (
+          percent !== null &&
+          percent < 80
+        );
+
+      }).length;
+
+
+    setStatus(
+      'examEligibilityFormStatus',
+
+      `บันทึกเรียบร้อย ${rows.length} คน` +
+      ` • ต่ำกว่า 80% ${lowAttendanceCount} คน` +
+      ` • รายงาน มส ${msCount} คน`,
+
+      'success'
+    );
+
+
+    showToast(
+      'บันทึกรายงาน มส แล้ว',
+
+      msCount > 0
+        ? `นักเรียนทั้งหมด ${rows.length} คน • มส ${msCount} คน`
+        : `นักเรียนทั้งหมด ${rows.length} คน • ไม่มีนักเรียน มส`,
+
+      'success'
+    );
+
+
+  }catch(error){
+
+    console.error(
+      'saveExamEligibilityReport ERROR',
+      error
+    );
+
+
+    setStatus(
+      'examEligibilityFormStatus',
+      error.message ||
+      'บันทึกรายงานไม่สำเร็จ',
+      'error'
+    );
+
+
+    showToast(
+      'ยังบันทึกไม่ได้',
+      error.message ||
+      'เกิดข้อผิดพลาด',
+      'error'
+    );
+
+
+  }finally{
+
+    if(saveButton){
+
+      saveButton.disabled =
+        !(
+          state.examEligibilityRows ||
+          []
+        ).length;
+
+
+      saveButton.innerHTML =
+        '💾 บันทึกรายงาน มส';
+
+    }
+
+  }
+
+}
     
 function bindEvents(){
   bindIfExists('togglePasswordBtn', 'click', togglePassword);
@@ -38681,6 +39143,12 @@ bindIfExists(
   'examEligibilityCancelBtn',
   'click',
   closeExamEligibilityOverlay
+);
+
+bindIfExists(
+  'saveExamEligibilityBtn',
+  'click',
+  saveExamEligibilityReport
 );
 
   bindIfExists(
