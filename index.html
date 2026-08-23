@@ -15159,6 +15159,9 @@ selectedExamEligibilityGroup: null,
 examEligibilityRows: [],
 examEligibilityDirty: false,
 
+/* เวลาเรียนเต็มล่าสุดของรายวิชา/ห้อง */
+examEligibilityAttendanceMax: null,
+
 
 midtermActiveColumn: '',
 
@@ -28716,18 +28719,15 @@ async function openExamEligibilityReport(
       error: midtermError
     } =
       await supabaseClient
-        .from(
-          'midterm_reports'
-        )
-        .select(`
-          student_id,
-          student_code,
-          student_no,
-          student_name,
-          attendance_score,
-          attendance_max,
-          attendance_percent
-        `)
+.from(
+  'midterm_reports'
+)
+.select(`
+  student_id,
+  student_code,
+  student_no,
+  student_name
+`)
         .eq(
           'academic_year',
           Number(
@@ -28816,10 +28816,13 @@ async function openExamEligibilityReport(
         .from(
           'exam_eligibility_reports'
         )
-        .select(`
-          student_code,
-          exam_status
-        `)
+.select(`
+  student_code,
+  attendance_score,
+  attendance_max,
+  attendance_percent,
+  exam_status
+`)
         .eq(
           'academic_year',
           Number(
@@ -28856,27 +28859,52 @@ async function openExamEligibilityReport(
     }
 
 
-    /*
-     * Map สถานะเดิม
-     */
-    const oldStatusMap =
-      new Map(
-        (
-          oldEligibilityRows ||
-          []
-        ).map(row => [
+/*
+ * Map ข้อมูลรายงาน มส เดิม
+ *
+ * สำคัญ:
+ * เวลาเรียนตรงนี้มาจาก exam_eligibility_reports
+ * ไม่ใช่ midterm_reports
+ */
+const oldEligibilityMap =
+  new Map(
+    (
+      oldEligibilityRows ||
+      []
+    ).map(row => [
 
-          normalizeMidtermRosterStudentCode(
-            row.student_code
-          ),
+      normalizeMidtermRosterStudentCode(
+        row.student_code
+      ),
 
-          safeText(
-            row.exam_status,
-            'eligible'
-          )
+      row
 
-        ])
-      );
+    ])
+  );
+
+
+/*
+ * เวลาเรียนเต็มล่าสุด
+ * ใช้ค่าที่เคยบันทึกในรายงาน มส เท่านั้น
+ */
+const firstSavedAttendance =
+  (
+    oldEligibilityRows ||
+    []
+  ).find(row =>
+    Number(
+      row.attendance_max
+    ) > 0
+  );
+
+
+state.examEligibilityAttendanceMax =
+  firstSavedAttendance
+    ? Number(
+        firstSavedAttendance
+          .attendance_max
+      )
+    : null;
 
 
     /* =====================================================
@@ -28886,58 +28914,81 @@ async function openExamEligibilityReport(
     state.examEligibilityRows =
       sortMidtermRosterStudents(
 
-        sourceRows.map(report => {
+sourceRows.map(report => {
 
-          const studentCode =
-            normalizeMidtermRosterStudentCode(
-              report.student_code
-            );
+  const studentCode =
+    normalizeMidtermRosterStudentCode(
+      report.student_code
+    );
 
 
-          return {
+  const oldEligibility =
+    oldEligibilityMap.get(
+      studentCode
+    ) ||
+    null;
 
-            student_id:
-              report.student_id ||
-              null,
 
-            student_code:
-              studentCode,
+  return {
 
-            student_no:
-              safeNum(
-                report.student_no
-              ),
+    student_id:
+      report.student_id ||
+      null,
 
-            student_name:
-              safeText(
-                report.student_name,
-                '-'
-              ),
+    student_code:
+      studentCode,
 
-            attendance_score:
-              safeNum(
-                report.attendance_score
-              ) ?? 0,
+    student_no:
+      safeNum(
+        report.student_no
+      ),
 
-            attendance_max:
-              safeNum(
-                report.attendance_max
-              ) ?? 0,
+    student_name:
+      safeText(
+        report.student_name,
+        '-'
+      ),
 
-            attendance_percent:
-              Number(
-                report.attendance_percent ||
-                0
-              ),
 
-            exam_status:
-              oldStatusMap.get(
-                studentCode
-              ) === 'ms'
-                ? 'ms'
-                : 'eligible'
+    attendance_score:
+      oldEligibility
+        ? safeNum(
+            oldEligibility
+              .attendance_score
+          )
+        : null,
 
-          };
+
+    attendance_max:
+      oldEligibility
+        ? safeNum(
+            oldEligibility
+              .attendance_max
+          )
+        : null,
+
+
+    attendance_percent:
+      oldEligibility
+        ? safeNum(
+            oldEligibility
+              .attendance_percent
+          )
+        : null,
+
+
+    exam_status:
+      safeText(
+        oldEligibility
+          ?.exam_status,
+        'eligible'
+      ) === 'ms'
+        ? 'ms'
+        : 'eligible'
+
+  };
+
+})
 
         })
 
@@ -28947,30 +28998,28 @@ async function openExamEligibilityReport(
     renderExamEligibilityStudentRows();
 
 
-    const lowCount =
-      state.examEligibilityRows
-        .filter(row =>
-          Number(
-            row.attendance_percent
-          ) < 80
-        )
-        .length;
-
-
-    setStatus(
-      'examEligibilityFormStatus',
-
-      `โหลดข้อมูลนักเรียน ${
-        state.examEligibilityRows.length
-      } คนเรียบร้อย` +
-      (
-        lowCount
-          ? ` • เวลาเรียนต่ำกว่า 80% ${lowCount} คน`
-          : ''
-      ),
-
-      'success'
+   const hasSavedAttendance =
+  state.examEligibilityRows
+    .some(row =>
+      safeNum(
+        row.attendance_score
+      ) !== null
     );
+
+
+setStatus(
+  'examEligibilityFormStatus',
+
+  hasSavedAttendance
+    ? `โหลดข้อมูลนักเรียน ${
+        state.examEligibilityRows.length
+      } คน และข้อมูลเวลาเรียนล่าสุดที่เคยบันทึกแล้ว`
+    : `โหลดรายชื่อนักเรียน ${
+        state.examEligibilityRows.length
+      } คนเรียบร้อย กรุณากรอกเวลาเรียนล่าสุด`,
+
+  'success'
+);
 
 
   }catch(error){
@@ -29045,15 +29094,15 @@ function renderExamEligibilityStudentRows(){
         index
       ) => {
 
-        const attendancePercent =
-          Number(
-            row.attendance_percent ||
-            0
-          );
+const attendancePercent =
+  safeNum(
+    row.attendance_percent
+  );
 
 
-        const isLowAttendance =
-          attendancePercent < 80;
+const isLowAttendance =
+  attendancePercent !== null &&
+  attendancePercent < 80;
 
 
         const isMs =
@@ -29076,18 +29125,16 @@ function renderExamEligibilityStudentRows(){
           .join(' ');
 
 
-        const attendanceScore =
-          Number(
-            row.attendance_score ||
-            0
-          );
+const attendanceScore =
+  safeNum(
+    row.attendance_score
+  );
 
 
-        const attendanceMax =
-          Number(
-            row.attendance_max ||
-            0
-          );
+const attendanceMax =
+  safeNum(
+    row.attendance_max
+  );
 
 
         return `
@@ -29143,23 +29190,27 @@ function renderExamEligibilityStudentRows(){
                 class="exam-eligibility-attendance-value"
               >
 
-                ${
-                  escapeHtml(
-                    formatPlainNumber(
-                      attendanceScore
-                    )
-                  )
-                }
+${
+  attendanceScore === null
+    ? '-'
+    : escapeHtml(
+        formatPlainNumber(
+          attendanceScore
+        )
+      )
+}
 
-                /
+/
 
-                ${
-                  escapeHtml(
-                    formatPlainNumber(
-                      attendanceMax
-                    )
-                  )
-                }
+${
+  attendanceMax === null
+    ? '-'
+    : escapeHtml(
+        formatPlainNumber(
+          attendanceMax
+        )
+      )
+}
 
               </span>
 
@@ -29179,14 +29230,16 @@ function renderExamEligibilityStudentRows(){
                 "
               >
 
-                ${
-                  escapeHtml(
-                    formatDecimal(
-                      attendancePercent,
-                      2
-                    )
-                  )
-                }%
+${
+  attendancePercent === null
+    ? '-'
+    : `${escapeHtml(
+        formatDecimal(
+          attendancePercent,
+          2
+        )
+      )}%`
+}
 
               </span>
 
@@ -29355,14 +29408,21 @@ function updateExamEligibilitySummary(){
     rows.length;
 
 
-  const lowAttendance =
-    rows.filter(row =>
-      Number(
-        row.attendance_percent ||
-        0
-      ) < 80
-    )
-    .length;
+const lowAttendance =
+  rows.filter(row => {
+
+    const percent =
+      safeNum(
+        row.attendance_percent
+      );
+
+    return (
+      percent !== null &&
+      percent < 80
+    );
+
+  })
+  .length;
 
 
   const msCount =
