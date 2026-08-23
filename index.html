@@ -6485,6 +6485,21 @@ tbody tr:hover td{
 
 }
 
+#downloadExamEligibilityTemplateBtn{
+  background:#e8f1ff !important;
+  color:#1453cc !important;
+  border:1px solid #bdd2ff !important;
+}
+
+#downloadExamEligibilityTemplateBtn:hover:not(:disabled){
+  background:#dbe9ff !important;
+}
+
+#downloadExamEligibilityTemplateBtn:disabled{
+  opacity:.55;
+  cursor:not-allowed;
+}
+
 /* จัดการนักเรียน */
 #manageMidtermStudentsBtn{
   background:#f1edff !important;
@@ -11988,6 +12003,14 @@ td{
       <div class="exam-eligibility-footer-actions">
 
         <button
+  id="downloadExamEligibilityTemplateBtn"
+  class="btn-secondary"
+  type="button"
+>
+  📥 ดาวน์โหลด Excel
+</button>
+
+        <button
           id="examEligibilityCancelBtn"
           class="btn-secondary"
           type="button"
@@ -15651,7 +15674,7 @@ midtermReport: [
 
 examEligibility: [
   'รายงานนักเรียนไม่มีสิทธิ์สอบ',
-  'รายงานนักเรียนที่ไม่มีสิทธิ์สอบ (มส) จากข้อมูลเวลาเรียนกลางภาค'
+  'กรอกเวลาเรียนล่าสุดและรายงานนักเรียนไม่มีสิทธิ์สอบ (มส)'
 ],
 
 import: [
@@ -22604,6 +22627,8 @@ function downloadTeacherTemplateFallback(){
   }
 }
 
+
+
 async function handleTeacherImportFileFallback(evt){
   try{
     const file = evt.target.files?.[0];
@@ -25254,7 +25279,359 @@ function applyMidtermSettings(){
 /* =====================================================
    EXAM ELIGIBILITY SETTINGS
    ===================================================== */
+function normalizeExamEligibilityFilenamePart(
+  value
+){
 
+  return String(
+    value ?? ''
+  )
+    .trim()
+    .replace(
+      /[\\/:*?"<>|]+/g,
+      '-'
+    )
+    .replace(
+      /\s+/g,
+      '-'
+    );
+
+}
+
+function downloadExamEligibilityTemplateExcel(){
+
+  try{
+
+    const group =
+      state.selectedExamEligibilityGroup;
+
+    const rows =
+      state.examEligibilityRows || [];
+
+    const user =
+      state.currentUser || {};
+
+
+    if(!group){
+      throw new Error(
+        'กรุณาเลือกรายวิชาก่อน'
+      );
+    }
+
+
+    if(!rows.length){
+      throw new Error(
+        'ไม่มีรายชื่อนักเรียนสำหรับสร้าง Template'
+      );
+    }
+
+
+    if(typeof XLSX === 'undefined'){
+      throw new Error(
+        'ไม่พบไลบรารี XLSX'
+      );
+    }
+
+
+    const attendanceMax =
+      safeNum(
+        state.examEligibilityAttendanceMax
+      );
+
+
+    /* =================================================
+       ข้อมูลหัวไฟล์
+       ================================================= */
+
+    const aoa = [
+
+      [
+        'รายงานนักเรียนไม่มีสิทธิ์สอบ'
+      ],
+
+      [
+        'รหัสวิชา',
+        group.subject_code || ''
+      ],
+
+      [
+        'รายวิชา',
+        group.subject_name || ''
+      ],
+
+      [
+        'ครูผู้สอน',
+        user.full_name ||
+        user.teacher_name ||
+        ''
+      ],
+
+      [
+        'รหัสครู',
+        user.teacher_code || ''
+      ],
+
+      [
+        'ปีการศึกษา',
+        group.academic_year || '',
+        'ภาคเรียน',
+        group.term || ''
+      ],
+
+      [
+        'ชั้น',
+        group.class_level || '',
+        'ห้อง',
+        group.room || ''
+      ],
+
+      [
+        'เวลาเรียนเต็ม',
+        attendanceMax === null
+          ? ''
+          : attendanceMax
+      ],
+
+      [],
+
+      [
+        'เลขที่',
+        'เลขประจำตัว',
+        'ชื่อ-สกุล',
+        'เวลาเรียน'
+      ]
+
+    ];
+
+
+    /* =================================================
+       รายชื่อนักเรียน
+       ================================================= */
+
+    rows.forEach(row => {
+
+      const attendanceScore =
+        safeNum(
+          row.attendance_score
+        );
+
+
+      aoa.push([
+
+        row.student_no ?? '',
+
+        row.student_code || '',
+
+        row.student_name || '',
+
+        attendanceScore === null
+          ? ''
+          : attendanceScore
+
+      ]);
+
+    });
+
+
+    /* =================================================
+       สร้าง Worksheet
+       ================================================= */
+
+    const ws =
+      XLSX.utils.aoa_to_sheet(
+        aoa
+      );
+
+
+    /*
+     * รวมเซลล์หัวเรื่อง
+     */
+    ws['!merges'] = [
+      {
+        s:{
+          r:0,
+          c:0
+        },
+        e:{
+          r:0,
+          c:3
+        }
+      }
+    ];
+
+
+    /*
+     * ความกว้างคอลัมน์
+     */
+    ws['!cols'] = [
+
+      {
+        wch:10
+      },
+
+      {
+        wch:16
+      },
+
+      {
+        wch:34
+      },
+
+      {
+        wch:16
+      }
+
+    ];
+
+
+    /*
+     * ความสูงบางแถว
+     */
+    ws['!rows'] = [];
+
+    ws['!rows'][0] = {
+      hpt:26
+    };
+
+    ws['!rows'][9] = {
+      hpt:22
+    };
+
+
+    /*
+     * Format เลขประจำตัวเป็น Text
+     * ป้องกัน Excel เปลี่ยนรูปแบบ
+     */
+    for(
+      let rowIndex = 10;
+      rowIndex < aoa.length;
+      rowIndex++
+    ){
+
+      const address =
+        XLSX.utils.encode_cell({
+          r:rowIndex,
+          c:1
+        });
+
+
+      if(ws[address]){
+
+        ws[address].t =
+          's';
+
+        ws[address].v =
+          String(
+            ws[address].v ?? ''
+          );
+
+      }
+
+    }
+
+
+    /* =================================================
+       Workbook
+       ================================================= */
+
+    const wb =
+      XLSX.utils.book_new();
+
+
+    XLSX.utils.book_append_sheet(
+      wb,
+      ws,
+      'รายงาน มส'
+    );
+
+
+    /* =================================================
+       ชื่อไฟล์
+       ================================================= */
+
+    const filename =
+      [
+        'exam_eligibility',
+
+        normalizeExamEligibilityFilenamePart(
+          group.subject_code
+        ),
+
+        normalizeExamEligibilityFilenamePart(
+          user.teacher_code
+        ),
+
+        normalizeExamEligibilityFilenamePart(
+          group.academic_year
+        ),
+
+        normalizeExamEligibilityFilenamePart(
+          group.term
+        ),
+
+        normalizeExamEligibilityFilenamePart(
+          group.class_level
+        ),
+
+        normalizeExamEligibilityFilenamePart(
+          group.room
+        )
+
+      ]
+        .join('_') +
+      '.xlsx';
+
+
+    XLSX.writeFile(
+      wb,
+      filename
+    );
+
+
+    setStatus(
+      'examEligibilityFormStatus',
+
+      `ดาวน์โหลด Excel Template แล้ว • นักเรียน ${rows.length} คน`,
+
+      'success'
+    );
+
+
+    showToast(
+      'ดาวน์โหลด Excel แล้ว',
+      filename,
+      'success'
+    );
+
+
+  }catch(error){
+
+    console.error(
+      'downloadExamEligibilityTemplateExcel ERROR',
+      error
+    );
+
+
+    setStatus(
+      'examEligibilityFormStatus',
+      error.message ||
+      'ดาวน์โหลด Excel ไม่สำเร็จ',
+      'error'
+    );
+
+
+    showToast(
+      'ดาวน์โหลดไม่สำเร็จ',
+      error.message ||
+      'เกิดข้อผิดพลาด',
+      'error'
+    );
+
+  }
+
+}
+
+    
 function applyExamEligibilitySettings(){
 
   const setting =
@@ -28810,6 +29187,19 @@ setStatus(
 
     }
 
+    if(
+  el(
+    'downloadExamEligibilityTemplateBtn'
+  )
+){
+
+  el(
+    'downloadExamEligibilityTemplateBtn'
+  ).disabled =
+    true;
+
+}
+
 
     /* =====================================================
        1. โหลดข้อมูลกลางภาค
@@ -28900,6 +29290,19 @@ if(
 
   el(
     'saveExamEligibilityBtn'
+  ).disabled =
+    true;
+
+}
+
+if(
+  el(
+    'downloadExamEligibilityTemplateBtn'
+  )
+){
+
+  el(
+    'downloadExamEligibilityTemplateBtn'
   ).disabled =
     true;
 
@@ -29119,6 +29522,18 @@ if(
     false;
 
 }
+if(
+  el(
+    'downloadExamEligibilityTemplateBtn'
+  )
+){
+
+  el(
+    'downloadExamEligibilityTemplateBtn'
+  ).disabled =
+    false;
+
+}
 
 
 const hasSavedAttendance =
@@ -29167,6 +29582,19 @@ setStatus(
 
   el(
     'saveExamEligibilityBtn'
+  ).disabled =
+    true;
+
+}
+
+if(
+  el(
+    'downloadExamEligibilityTemplateBtn'
+  )
+){
+
+  el(
+    'downloadExamEligibilityTemplateBtn'
   ).disabled =
     true;
 
@@ -39149,6 +39577,12 @@ bindIfExists(
   'saveExamEligibilityBtn',
   'click',
   saveExamEligibilityReport
+);
+
+  bindIfExists(
+  'downloadExamEligibilityTemplateBtn',
+  'click',
+  downloadExamEligibilityTemplateExcel
 );
 
   bindIfExists(
