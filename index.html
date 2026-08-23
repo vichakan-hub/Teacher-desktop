@@ -6559,6 +6559,21 @@ tbody tr:hover td{
   cursor:not-allowed;
 }
 
+#importExamEligibilityExcelBtn{
+  background:#fff3db !important;
+  color:#b86a00 !important;
+  border:1px solid #ffd89a !important;
+}
+
+#importExamEligibilityExcelBtn:hover:not(:disabled){
+  background:#ffe9bf !important;
+}
+
+#importExamEligibilityExcelBtn:disabled{
+  opacity:.55;
+  cursor:not-allowed;
+}
+
 /* จัดการนักเรียน */
 #manageMidtermStudentsBtn{
   background:#f1edff !important;
@@ -12070,6 +12085,15 @@ td{
 </button>
 
         <button
+  id="importExamEligibilityExcelBtn"
+  class="btn-secondary"
+  type="button"
+>
+  📤 นำเข้า Excel
+</button>
+
+
+        <button
           id="examEligibilityCancelBtn"
           class="btn-secondary"
           type="button"
@@ -12086,6 +12110,13 @@ td{
         >
           💾 บันทึกรายงาน มส
         </button>
+
+                <input
+  id="examEligibilityExcelInput"
+  type="file"
+  accept=".xlsx"
+  hidden
+>
 
       </div>
 
@@ -25357,6 +25388,756 @@ function normalizeExamEligibilityFilenamePart(
 
 }
 
+function getExamEligibilityExcelCellValue(
+  cell
+){
+
+  const value =
+    cell?.value;
+
+
+  if(
+    value === null ||
+    value === undefined
+  ){
+    return '';
+  }
+
+
+  if(
+    typeof value === 'object'
+  ){
+
+    if(
+      value.result !== undefined &&
+      value.result !== null
+    ){
+      return value.result;
+    }
+
+
+    if(
+      value.text !== undefined &&
+      value.text !== null
+    ){
+      return value.text;
+    }
+
+
+    if(
+      Array.isArray(
+        value.richText
+      )
+    ){
+
+      return value.richText
+        .map(item =>
+          item.text || ''
+        )
+        .join('');
+
+    }
+
+  }
+
+
+  return value;
+
+}
+
+
+function normalizeExamEligibilityImportValue(
+  value
+){
+
+  return String(
+    value ?? ''
+  )
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+
+}
+
+
+function readExamEligibilityMetaSheet(
+  worksheet
+){
+
+  const meta = {};
+
+
+  worksheet.eachRow(row => {
+
+    const key =
+      String(
+        getExamEligibilityExcelCellValue(
+          row.getCell(1)
+        ) ?? ''
+      ).trim();
+
+
+    if(!key){
+      return;
+    }
+
+
+    meta[key] =
+      getExamEligibilityExcelCellValue(
+        row.getCell(2)
+      );
+
+  });
+
+
+  return meta;
+
+}
+
+function validateExamEligibilityImportMeta(
+  meta
+){
+
+  const group =
+    state.selectedExamEligibilityGroup;
+
+  const user =
+    state.currentUser || {};
+
+
+  if(!group){
+    throw new Error(
+      'ยังไม่ได้เลือกรายวิชา'
+    );
+  }
+
+
+  if(
+    normalizeExamEligibilityImportValue(
+      meta.file_type
+    ) !==
+    'exam_eligibility'
+  ){
+
+    throw new Error(
+      'ไฟล์นี้ไม่ใช่ Excel สำหรับรายงาน มส'
+    );
+
+  }
+
+
+  const checks = [
+
+    {
+      name:'รหัสวิชา',
+      actual:meta.subject_code,
+      expected:group.subject_code
+    },
+
+    {
+      name:'รหัสครู',
+      actual:meta.teacher_code,
+      expected:user.teacher_code
+    },
+
+    {
+      name:'ปีการศึกษา',
+      actual:meta.academic_year,
+      expected:group.academic_year
+    },
+
+    {
+      name:'ภาคเรียน',
+      actual:meta.term,
+      expected:group.term
+    },
+
+    {
+      name:'ชั้น',
+      actual:meta.class_level,
+      expected:group.class_level
+    },
+
+    {
+      name:'ห้อง',
+      actual:meta.room,
+      expected:group.room
+    }
+
+  ];
+
+
+  for(
+    const item of checks
+  ){
+
+    if(
+      normalizeExamEligibilityImportValue(
+        item.actual
+      ) !==
+      normalizeExamEligibilityImportValue(
+        item.expected
+      )
+    ){
+
+      throw new Error(
+        `ไฟล์ไม่ตรงกับรายวิชาที่เปิดอยู่: ${item.name}`
+      );
+
+    }
+
+  }
+
+}
+
+async function importExamEligibilityExcelFile(
+  file
+){
+
+  try{
+
+    if(!file){
+      return;
+    }
+
+
+    const group =
+      state.selectedExamEligibilityGroup;
+
+    const rows =
+      state.examEligibilityRows || [];
+
+
+    if(!group){
+
+      throw new Error(
+        'กรุณาเลือกรายวิชาก่อน'
+      );
+
+    }
+
+
+    if(!rows.length){
+
+      throw new Error(
+        'ยังไม่มีรายชื่อนักเรียนสำหรับนำเข้า'
+      );
+
+    }
+
+
+    if(
+      typeof ExcelJS ===
+      'undefined'
+    ){
+
+      throw new Error(
+        'ไม่พบไลบรารี ExcelJS'
+      );
+
+    }
+
+
+    if(
+      !/\.xlsx$/i.test(
+        file.name || ''
+      )
+    ){
+
+      throw new Error(
+        'รองรับเฉพาะไฟล์ .xlsx'
+      );
+
+    }
+
+
+    setStatus(
+      'examEligibilityFormStatus',
+      'กำลังตรวจสอบและนำเข้า Excel...',
+      'info'
+    );
+
+
+    /* ===============================
+       อ่าน Workbook
+       =============================== */
+
+    const buffer =
+      await file.arrayBuffer();
+
+
+    const workbook =
+      new ExcelJS.Workbook();
+
+
+    await workbook.xlsx.load(
+      buffer
+    );
+
+
+    /* ===============================
+       ตรวจ META
+       =============================== */
+
+    const metaSheet =
+      workbook.getWorksheet(
+        '__meta'
+      );
+
+
+    if(!metaSheet){
+
+      throw new Error(
+        'ไม่พบข้อมูลตรวจสอบไฟล์ กรุณาใช้ Excel ที่ดาวน์โหลดจาก TeacherPR'
+      );
+
+    }
+
+
+    const meta =
+      readExamEligibilityMetaSheet(
+        metaSheet
+      );
+
+
+    validateExamEligibilityImportMeta(
+      meta
+    );
+
+
+    /* ===============================
+       Sheet หลัก
+       =============================== */
+
+    const worksheet =
+      workbook.getWorksheet(
+        'รายงาน มส'
+      );
+
+
+    if(!worksheet){
+
+      throw new Error(
+        'ไม่พบ Sheet "รายงาน มส"'
+      );
+
+    }
+
+
+    /* ===============================
+       ตรวจ Header
+       =============================== */
+
+    const headerStudentCode =
+      normalizeExamEligibilityImportValue(
+        getExamEligibilityExcelCellValue(
+          worksheet.getCell('B3')
+        )
+      );
+
+
+    const headerAttendance =
+      normalizeExamEligibilityImportValue(
+        getExamEligibilityExcelCellValue(
+          worksheet.getCell('D3')
+        )
+      );
+
+
+    if(
+      headerStudentCode !==
+      'เลขประจำตัว' ||
+      headerAttendance !==
+      'เวลาเรียน'
+    ){
+
+      throw new Error(
+        'รูปแบบ Excel ไม่ถูกต้อง กรุณาใช้ Template ที่ดาวน์โหลดจากระบบ'
+      );
+
+    }
+
+
+    /* ===============================
+       เวลาเรียนเต็ม D2
+       =============================== */
+
+    const rawAttendanceMax =
+      getExamEligibilityExcelCellValue(
+        worksheet.getCell('D2')
+      );
+
+
+    const attendanceMax =
+      Number(
+        rawAttendanceMax
+      );
+
+
+    if(
+      !Number.isFinite(
+        attendanceMax
+      ) ||
+      attendanceMax <= 0
+    ){
+
+      throw new Error(
+        'กรุณากรอกเวลาเรียนเต็มในช่องสีฟ้า D2'
+      );
+
+    }
+
+
+    /* ===============================
+       สร้าง Map นักเรียนในหน้าปัจจุบัน
+       =============================== */
+
+    const currentStudentMap =
+      new Map();
+
+
+    rows.forEach(row => {
+
+      const code =
+        String(
+          row.student_code ||
+          ''
+        ).trim();
+
+
+      if(code){
+
+        currentStudentMap.set(
+          code,
+          row
+        );
+
+      }
+
+    });
+
+
+    /* ===============================
+       อ่านข้อมูลจาก Excel
+       แต่ยังไม่เขียนเข้า State
+       เพื่อให้ตรวจครบก่อน
+       =============================== */
+
+    const pendingChanges = [];
+
+    const seenStudentCodes =
+      new Set();
+
+    const unknownStudentCodes =
+      [];
+
+    const invalidRows =
+      [];
+
+
+    for(
+      let excelRow = 4;
+      excelRow <= worksheet.rowCount;
+      excelRow++
+    ){
+
+      const studentCode =
+        String(
+          getExamEligibilityExcelCellValue(
+            worksheet.getCell(
+              excelRow,
+              2
+            )
+          ) ?? ''
+        ).trim();
+
+
+      if(!studentCode){
+        continue;
+      }
+
+
+      if(
+        seenStudentCodes.has(
+          studentCode
+        )
+      ){
+
+        throw new Error(
+          `พบเลขประจำตัว ${studentCode} ซ้ำใน Excel`
+        );
+
+      }
+
+
+      seenStudentCodes.add(
+        studentCode
+      );
+
+
+      const currentRow =
+        currentStudentMap.get(
+          studentCode
+        );
+
+
+      if(!currentRow){
+
+        unknownStudentCodes.push(
+          studentCode
+        );
+
+        continue;
+      }
+
+
+      const rawAttendance =
+        getExamEligibilityExcelCellValue(
+          worksheet.getCell(
+            excelRow,
+            4
+          )
+        );
+
+
+      const rawText =
+        String(
+          rawAttendance ??
+          ''
+        ).trim();
+
+
+      let attendanceScore =
+        null;
+
+
+      /*
+       * ช่องว่างอนุญาตให้นำเข้า
+       * แต่ตอนบันทึกระบบจะตรวจว่ากรอกครบ
+       */
+      if(rawText !== ''){
+
+        attendanceScore =
+          Number(
+            rawText.replace(
+              /,/g,
+              ''
+            )
+          );
+
+
+        if(
+          !Number.isFinite(
+            attendanceScore
+          ) ||
+          attendanceScore < 0 ||
+          attendanceScore >
+            attendanceMax
+        ){
+
+          invalidRows.push(
+            excelRow
+          );
+
+          continue;
+        }
+
+      }
+
+
+      pendingChanges.push({
+
+        studentCode,
+
+        currentRow,
+
+        attendanceScore
+
+      });
+
+    }
+
+
+    /* ===============================
+       Validation
+       =============================== */
+
+    if(
+      unknownStudentCodes.length
+    ){
+
+      throw new Error(
+        `พบเลขประจำตัวที่ไม่อยู่ในรายชื่อนักเรียน: ${
+          unknownStudentCodes
+            .slice(0, 5)
+            .join(', ')
+        }${
+          unknownStudentCodes.length > 5
+            ? ' ...'
+            : ''
+        }`
+      );
+
+    }
+
+
+    if(
+      invalidRows.length
+    ){
+
+      throw new Error(
+        `เวลาเรียนไม่ถูกต้องที่แถว ${
+          invalidRows
+            .slice(0, 10)
+            .join(', ')
+        }`
+      );
+
+    }
+
+
+    if(
+      !pendingChanges.length
+    ){
+
+      throw new Error(
+        'ไม่พบข้อมูลนักเรียนสำหรับนำเข้า'
+      );
+
+    }
+
+
+    /* ===============================
+       ผ่านทุกอย่างแล้ว
+       ค่อยเขียนเข้า State
+       =============================== */
+
+    state.examEligibilityAttendanceMax =
+      attendanceMax;
+
+
+    pendingChanges.forEach(
+      item => {
+
+        item.currentRow
+          .attendance_score =
+            item.attendanceScore;
+
+
+        item.currentRow
+          .attendance_max =
+            attendanceMax;
+
+
+        item.currentRow
+          .attendance_percent =
+            calculateExamEligibilityAttendancePercent(
+              item.attendanceScore,
+              attendanceMax
+            );
+
+        /*
+         * ไม่แตะ exam_status
+         * ครูต้องพิจารณา มส เอง
+         */
+
+      }
+    );
+
+
+    state.examEligibilityDirty =
+      true;
+
+
+    syncExamEligibilityAttendanceMaxInput();
+
+
+    renderExamEligibilityStudentRows();
+
+
+    /* ===============================
+       สรุปผล
+       =============================== */
+
+    const importedCount =
+      pendingChanges.length;
+
+
+    const blankCount =
+      pendingChanges.filter(
+        item =>
+          item.attendanceScore ===
+          null
+      ).length;
+
+
+    const lowCount =
+      pendingChanges.filter(
+        item => {
+
+          const percent =
+            safeNum(
+              item.currentRow
+                .attendance_percent
+            );
+
+
+          return (
+            percent !== null &&
+            percent < 80
+          );
+
+        }
+      ).length;
+
+
+    setStatus(
+      'examEligibilityFormStatus',
+
+      `นำเข้า Excel สำเร็จ ${importedCount} คน • ต่ำกว่า 80% ${lowCount} คน${
+        blankCount
+          ? ` • ยังไม่ได้กรอก ${blankCount} คน`
+          : ''
+      }`,
+
+      'success'
+    );
+
+
+    showToast(
+      'นำเข้า Excel สำเร็จ',
+      `นำเข้าเวลาเรียน ${importedCount} คน`,
+      'success'
+    );
+
+
+  }catch(error){
+
+    console.error(
+      'importExamEligibilityExcelFile ERROR',
+      error
+    );
+
+
+    setStatus(
+      'examEligibilityFormStatus',
+      error.message ||
+      'นำเข้า Excel ไม่สำเร็จ',
+      'error'
+    );
+
+
+    showToast(
+      'นำเข้า Excel ไม่สำเร็จ',
+      error.message ||
+      'เกิดข้อผิดพลาด',
+      'error'
+    );
+
+  }
+
+}
+
 async function downloadExamEligibilityTemplateExcel(){
 
   try{
@@ -29598,6 +30379,17 @@ setStatus(
 
 }
 
+if(
+  el(
+    'importExamEligibilityExcelBtn'
+  )
+){
+  el(
+    'importExamEligibilityExcelBtn'
+  ).disabled =
+    true;
+}
+
 
     /* =====================================================
        1. โหลดข้อมูลกลางภาค
@@ -29704,6 +30496,17 @@ if(
   ).disabled =
     true;
 
+}
+
+if(
+  el(
+    'importExamEligibilityExcelBtn'
+  )
+){
+  el(
+    'importExamEligibilityExcelBtn'
+  ).disabled =
+    true;
 }
       setStatus(
         'examEligibilityFormStatus',
@@ -29933,6 +30736,17 @@ if(
 
 }
 
+if(
+  el(
+    'importExamEligibilityExcelBtn'
+  )
+){
+  el(
+    'importExamEligibilityExcelBtn'
+  ).disabled =
+    false;
+}
+
 
 const hasSavedAttendance =
   state.examEligibilityRows
@@ -29996,6 +30810,17 @@ if(
   ).disabled =
     true;
 
+}
+
+if(
+  el(
+    'importExamEligibilityExcelBtn'
+  )
+){
+  el(
+    'importExamEligibilityExcelBtn'
+  ).disabled =
+    true;
 }
 
 
@@ -39981,6 +40806,92 @@ bindIfExists(
   'downloadExamEligibilityTemplateBtn',
   'click',
   downloadExamEligibilityTemplateExcel
+);
+
+  bindIfExists(
+  'importExamEligibilityExcelBtn',
+  'click',
+  event => {
+
+    event.preventDefault();
+
+
+    const button =
+      el(
+        'importExamEligibilityExcelBtn'
+      );
+
+
+    if(
+      button &&
+      button.disabled
+    ){
+      return;
+    }
+
+
+    const input =
+      el(
+        'examEligibilityExcelInput'
+      );
+
+
+    if(!input){
+
+      showToast(
+        'นำเข้าไม่ได้',
+        'ไม่พบช่องเลือกไฟล์ Excel',
+        'error'
+      );
+
+      return;
+    }
+
+
+    /*
+     * ล้างค่าเก่า
+     * เพื่อให้เลือกไฟล์เดิมซ้ำได้
+     */
+    input.value =
+      '';
+
+
+    input.click();
+
+  }
+);
+
+
+bindIfExists(
+  'examEligibilityExcelInput',
+  'change',
+  async event => {
+
+    const input =
+      event.target;
+
+
+    const file =
+      input.files?.[0];
+
+
+    if(!file){
+      return;
+    }
+
+
+    await importExamEligibilityExcelFile(
+      file
+    );
+
+
+    /*
+     * เลือกไฟล์เดิมซ้ำได้
+     */
+    input.value =
+      '';
+
+  }
 );
 
   bindIfExists(
