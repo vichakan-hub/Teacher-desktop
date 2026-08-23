@@ -29,6 +29,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 
 <!-- QR CODE GENERATOR -->
 <script src="./vendor/qrcode.min.js"></script>
@@ -25298,7 +25299,7 @@ function normalizeExamEligibilityFilenamePart(
 
 }
 
-function downloadExamEligibilityTemplateExcel(){
+async function downloadExamEligibilityTemplateExcel(){
 
   try{
 
@@ -25313,23 +25314,32 @@ function downloadExamEligibilityTemplateExcel(){
 
 
     if(!group){
+
       throw new Error(
         'กรุณาเลือกรายวิชาก่อน'
       );
+
     }
 
 
     if(!rows.length){
+
       throw new Error(
         'ไม่มีรายชื่อนักเรียนสำหรับสร้าง Template'
       );
+
     }
 
 
-    if(typeof XLSX === 'undefined'){
+    if(
+      typeof ExcelJS ===
+      'undefined'
+    ){
+
       throw new Error(
-        'ไม่พบไลบรารี XLSX'
+        'ไม่พบไลบรารี ExcelJS'
       );
+
     }
 
 
@@ -25340,209 +25350,479 @@ function downloadExamEligibilityTemplateExcel(){
 
 
     /* =================================================
-       ข้อมูลหัวไฟล์
+       WORKBOOK
        ================================================= */
 
-    const aoa = [
+    const workbook =
+      new ExcelJS.Workbook();
 
-      [
-        'รายงานนักเรียนไม่มีสิทธิ์สอบ'
-      ],
 
-      [
-        'รหัสวิชา',
-        group.subject_code || ''
-      ],
+    workbook.creator =
+      'TeacherPR';
 
-      [
-        'รายวิชา',
-        group.subject_name || ''
-      ],
+    workbook.created =
+      new Date();
 
-      [
-        'ครูผู้สอน',
-        user.full_name ||
-        user.teacher_name ||
-        ''
-      ],
 
-      [
-        'รหัสครู',
-        user.teacher_code || ''
-      ],
-
-      [
-        'ปีการศึกษา',
-        group.academic_year || '',
-        'ภาคเรียน',
-        group.term || ''
-      ],
-
-      [
-        'ชั้น',
-        group.class_level || '',
-        'ห้อง',
-        group.room || ''
-      ],
-
-      [
-        'เวลาเรียนเต็ม',
-        attendanceMax === null
-          ? ''
-          : attendanceMax
-      ],
-
-      [],
-
-      [
-        'เลขที่',
-        'เลขประจำตัว',
-        'ชื่อ-สกุล',
-        'เวลาเรียน'
-      ]
-
-    ];
+    const worksheet =
+      workbook.addWorksheet(
+        'รายงาน มส'
+      );
 
 
     /* =================================================
-       รายชื่อนักเรียน
+       ความกว้างคอลัมน์
+       ตรงกับ Template ต้นฉบับ
        ================================================= */
 
-    rows.forEach(row => {
+    worksheet.getColumn('A').width =
+      10.83;
 
-      const attendanceScore =
-        safeNum(
-          row.attendance_score
-        );
+    worksheet.getColumn('B').width =
+      16.83;
+
+    worksheet.getColumn('C').width =
+      34.83;
+
+    worksheet.getColumn('D').width =
+      16.83;
 
 
-      aoa.push([
+    /* =================================================
+       FONT หลัก
+       Template ใช้ Calibri 12
+       ================================================= */
 
-        row.student_no ?? '',
+    worksheet.eachRow(row => {
 
-        row.student_code || '',
+      row.eachCell(cell => {
 
-        row.student_name || '',
+        cell.font = {
+          name:'Calibri',
+          size:12
+        };
 
-        attendanceScore === null
-          ? ''
-          : attendanceScore
-
-      ]);
+      });
 
     });
 
 
     /* =================================================
-       สร้าง Worksheet
+       ส่วนบนของ Template
+       A1:C2 = ข้อความแนะนำ
+       D1    = เวลาเรียนเต็ม
+       D2    = ช่องกรอกสีฟ้า
        ================================================= */
 
-    const ws =
-      XLSX.utils.aoa_to_sheet(
-        aoa
-      );
+    worksheet.mergeCells(
+      'A1:C2'
+    );
+
+
+    const instructionCell =
+      worksheet.getCell('A1');
+
+
+    instructionCell.value =
+      'ให้กรอกข้อมูลในช่องสีฟ้า';
+
+
+    instructionCell.font = {
+      name:'Calibri',
+      size:12
+    };
+
+
+    instructionCell.alignment = {
+      horizontal:'center',
+      vertical:'middle'
+    };
+
+
+    const fullAttendanceTitle =
+      worksheet.getCell('D1');
+
+
+    fullAttendanceTitle.value =
+      'เวลาเรียนเต็ม';
+
+
+    fullAttendanceTitle.font = {
+      name:'Calibri',
+      size:12
+    };
+
+
+    fullAttendanceTitle.alignment = {
+      vertical:'middle'
+    };
+
+
+    const fullAttendanceCell =
+      worksheet.getCell('D2');
+
+
+    fullAttendanceCell.value =
+      attendanceMax === null
+        ? null
+        : attendanceMax;
 
 
     /*
-     * รวมเซลล์หัวเรื่อง
+     * สีฟ้าตาม Template
      */
-    ws['!merges'] = [
-      {
-        s:{
-          r:0,
-          c:0
-        },
-        e:{
-          r:0,
-          c:3
+    fullAttendanceCell.fill = {
+      type:'pattern',
+      pattern:'solid',
+      fgColor:{
+        argb:'FFDBEEF4'
+      }
+    };
+
+
+    /* =================================================
+       BORDER
+       ================================================= */
+
+    const thinBorder = {
+
+      top:{
+        style:'thin',
+        color:{
+          argb:'FF000000'
+        }
+      },
+
+      left:{
+        style:'thin',
+        color:{
+          argb:'FF000000'
+        }
+      },
+
+      bottom:{
+        style:'thin',
+        color:{
+          argb:'FF000000'
+        }
+      },
+
+      right:{
+        style:'thin',
+        color:{
+          argb:'FF000000'
         }
       }
-    ];
 
-
-    /*
-     * ความกว้างคอลัมน์
-     */
-    ws['!cols'] = [
-
-      {
-        wch:10
-      },
-
-      {
-        wch:16
-      },
-
-      {
-        wch:34
-      },
-
-      {
-        wch:16
-      }
-
-    ];
-
-
-    /*
-     * ความสูงบางแถว
-     */
-    ws['!rows'] = [];
-
-    ws['!rows'][0] = {
-      hpt:26
-    };
-
-    ws['!rows'][9] = {
-      hpt:22
     };
 
 
-    /*
-     * Format เลขประจำตัวเป็น Text
-     * ป้องกัน Excel เปลี่ยนรูปแบบ
-     */
+    fullAttendanceTitle.border =
+      thinBorder;
+
+    fullAttendanceCell.border =
+      thinBorder;
+
+
+    /* =================================================
+       HEADER แถว 3
+       ================================================= */
+
+    worksheet.getCell('A3').value =
+      'เลขที่';
+
+    worksheet.getCell('B3').value =
+      'เลขประจำตัว';
+
+    worksheet.getCell('C3').value =
+      'ชื่อ-สกุล';
+
+    worksheet.getCell('D3').value =
+      'เวลาเรียน';
+
+
     for(
-      let rowIndex = 10;
-      rowIndex < aoa.length;
-      rowIndex++
+      let column = 1;
+      column <= 4;
+      column++
     ){
 
-      const address =
-        XLSX.utils.encode_cell({
-          r:rowIndex,
-          c:1
-        });
+      const cell =
+        worksheet.getCell(
+          3,
+          column
+        );
 
 
-      if(ws[address]){
+      cell.font = {
+        name:'Calibri',
+        size:12
+      };
 
-        ws[address].t =
-          's';
 
-        ws[address].v =
-          String(
-            ws[address].v ?? ''
-          );
+      cell.border =
+        thinBorder;
 
-      }
+
+      cell.alignment = {
+        vertical:'middle'
+      };
 
     }
 
 
     /* =================================================
-       Workbook
+       รายชื่อนักเรียน
+       เริ่มแถว 4
        ================================================= */
 
-    const wb =
-      XLSX.utils.book_new();
+    rows.forEach(
+      (
+        row,
+        index
+      ) => {
+
+        const excelRow =
+          index + 4;
 
 
-    XLSX.utils.book_append_sheet(
-      wb,
-      ws,
-      'รายงาน มส'
+        const attendanceScore =
+          safeNum(
+            row.attendance_score
+          );
+
+
+        /* เลขที่ */
+        worksheet
+          .getCell(
+            excelRow,
+            1
+          )
+          .value =
+            row.student_no ??
+            '';
+
+
+        /* เลขประจำตัว */
+        const codeCell =
+          worksheet.getCell(
+            excelRow,
+            2
+          );
+
+
+        codeCell.value =
+          String(
+            row.student_code ||
+            ''
+          );
+
+
+        /*
+         * บังคับเป็น Text
+         * แต่จัดขวาให้หน้าตาเหมือนต้นฉบับ
+         */
+        codeCell.numFmt =
+          '@';
+
+
+        codeCell.alignment = {
+          horizontal:'right',
+          vertical:'middle'
+        };
+
+
+        /* ชื่อ-สกุล */
+        worksheet
+          .getCell(
+            excelRow,
+            3
+          )
+          .value =
+            row.student_name ||
+            '';
+
+
+        /* เวลาเรียน */
+        const attendanceCell =
+          worksheet.getCell(
+            excelRow,
+            4
+          );
+
+
+        attendanceCell.value =
+          attendanceScore === null
+            ? null
+            : attendanceScore;
+
+
+        /*
+         * ช่องกรอกสีฟ้า
+         */
+        attendanceCell.fill = {
+          type:'pattern',
+          pattern:'solid',
+          fgColor:{
+            argb:'FFDBEEF4'
+          }
+        };
+
+
+        /* =========================
+           Border ทุกช่อง
+           ========================= */
+
+        for(
+          let column = 1;
+          column <= 4;
+          column++
+        ){
+
+          const cell =
+            worksheet.getCell(
+              excelRow,
+              column
+            );
+
+
+          cell.font = {
+            name:'Calibri',
+            size:12
+          };
+
+
+          cell.border =
+            thinBorder;
+
+
+          cell.alignment = {
+            ...(
+              cell.alignment ||
+              {}
+            ),
+            vertical:'middle'
+          };
+
+        }
+
+
+        /*
+         * เลขที่ชิดขวา
+         */
+        worksheet
+          .getCell(
+            excelRow,
+            1
+          )
+          .alignment = {
+            horizontal:'right',
+            vertical:'middle'
+          };
+
+
+        /*
+         * ชื่อชิดซ้าย
+         */
+        worksheet
+          .getCell(
+            excelRow,
+            3
+          )
+          .alignment = {
+            horizontal:'left',
+            vertical:'middle'
+          };
+
+
+        /*
+         * เวลาเรียนชิดขวา
+         */
+        attendanceCell.alignment = {
+          horizontal:'right',
+          vertical:'middle'
+        };
+
+      }
     );
+
+
+    /* =================================================
+       META SHEET
+       ซ่อนจากครู แต่ใช้ตรวจสอบตอน Import
+       ================================================= */
+
+    const metaSheet =
+      workbook.addWorksheet(
+        '__meta'
+      );
+
+
+    metaSheet.state =
+      'veryHidden';
+
+
+    metaSheet.addRows([
+
+      [
+        'file_type',
+        'exam_eligibility'
+      ],
+
+      [
+        'schema_version',
+        '1'
+      ],
+
+      [
+        'subject_code',
+        String(
+          group.subject_code ||
+          ''
+        )
+      ],
+
+      [
+        'teacher_code',
+        String(
+          user.teacher_code ||
+          ''
+        )
+      ],
+
+      [
+        'academic_year',
+        String(
+          group.academic_year ||
+          ''
+        )
+      ],
+
+      [
+        'term',
+        String(
+          group.term ||
+          ''
+        )
+      ],
+
+      [
+        'class_level',
+        String(
+          group.class_level ||
+          ''
+        )
+      ],
+
+      [
+        'room',
+        String(
+          group.room ||
+          ''
+        )
+      ]
+
+    ]);
 
 
     /* =================================================
@@ -25582,11 +25862,71 @@ function downloadExamEligibilityTemplateExcel(){
       '.xlsx';
 
 
-    XLSX.writeFile(
-      wb,
-      filename
+    /* =================================================
+       WRITE FILE
+       ================================================= */
+
+    const buffer =
+      await workbook.xlsx
+        .writeBuffer();
+
+
+    const blob =
+      new Blob(
+        [
+          buffer
+        ],
+        {
+          type:
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        }
+      );
+
+
+    const url =
+      URL.createObjectURL(
+        blob
+      );
+
+
+    const link =
+      document.createElement(
+        'a'
+      );
+
+
+    link.href =
+      url;
+
+    link.download =
+      filename;
+
+
+    document.body
+      .appendChild(
+        link
+      );
+
+
+    link.click();
+
+
+    link.remove();
+
+
+    setTimeout(
+      () => {
+        URL.revokeObjectURL(
+          url
+        );
+      },
+      1000
     );
 
+
+    /* =================================================
+       SUCCESS
+       ================================================= */
 
     setStatus(
       'examEligibilityFormStatus',
