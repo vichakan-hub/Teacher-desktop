@@ -5757,17 +5757,18 @@
 }
 
 
-/* กล่องหลัก */
 #examEligibilityOverlay
 .exam-eligibility-overlay-card{
 
   width:min(
-    1180px,
+    1500px,
     calc(100vw - 28px)
   );
 
+  max-width:1500px;
+
   height:min(
-    820px,
+    920px,
     calc(100vh - 28px)
   );
 
@@ -6044,7 +6045,7 @@
 
   width:100%;
 
-  min-width:900px !important;
+  min-width:1080px !important;
 
   table-layout:fixed;
 
@@ -6092,6 +6093,63 @@
 tbody tr:hover td{
 
   filter:brightness(.985);
+}
+
+/* ===== Exam Eligibility column widths ===== */
+
+#examEligibilityOverlay
+.exam-eligibility-student-table th:nth-child(1),
+#examEligibilityOverlay
+.exam-eligibility-student-table td:nth-child(1){
+  width:70px;
+  text-align:center;
+}
+
+#examEligibilityOverlay
+.exam-eligibility-student-table th:nth-child(2),
+#examEligibilityOverlay
+.exam-eligibility-student-table td:nth-child(2){
+  width:125px;
+  text-align:center;
+}
+
+#examEligibilityOverlay
+.exam-eligibility-student-table th:nth-child(3),
+#examEligibilityOverlay
+.exam-eligibility-student-table td:nth-child(3){
+  width:auto;
+}
+
+#examEligibilityOverlay
+.exam-eligibility-student-table th:nth-child(4),
+#examEligibilityOverlay
+.exam-eligibility-student-table td:nth-child(4){
+  width:155px;
+  text-align:center;
+}
+
+#examEligibilityOverlay
+.exam-eligibility-student-table th:nth-child(5),
+#examEligibilityOverlay
+.exam-eligibility-student-table td:nth-child(5){
+  width:135px;
+  text-align:center;
+}
+
+#examEligibilityOverlay
+.exam-eligibility-student-table th:nth-child(6),
+#examEligibilityOverlay
+.exam-eligibility-student-table td:nth-child(6){
+  width:135px;
+  text-align:center;
+}
+
+#examEligibilityOverlay
+.exam-eligibility-student-table th:nth-child(7),
+#examEligibilityOverlay
+.exam-eligibility-student-table td:nth-child(7){
+  width:145px;
+  text-align:center;
 }
 
 
