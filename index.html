@@ -43489,16 +43489,22 @@ async function loadTeacherGradeStats(){
       'info'
     );
 
-    const { data, error } = await supabaseClient.rpc(
-      'get_teacher_grade_stat_summary',
-      {
-        p_teacher_id: state.currentUser.id,
-        p_academic_year: academicYear,
-        p_term: term,
-        p_subject_codes: subjectCodes,
-        p_top_limit: 20
-      }
-    );
+if(!state.teacherSessionToken){
+  throw new Error(
+    'Session หมดอายุ กรุณาเข้าสู่ระบบใหม่'
+  );
+}
+
+const { data, error } = await supabaseClient.rpc(
+  'get_teacher_grade_stat_summary_session',
+  {
+    p_token: state.teacherSessionToken,
+    p_academic_year: academicYear,
+    p_term: term,
+    p_subject_codes: subjectCodes,
+    p_top_limit: 20
+  }
+);
 
     if(error){
       throw error;
