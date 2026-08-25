@@ -15261,36 +15261,109 @@ async function loginWithTeacherRpc(teacherCodeRaw, passwordRaw){
     throw new Error('กรุณากรอกรหัสผ่าน');
   }
 
-  const { data, error } = await supabaseClient.rpc('login_teacher', {
-    p_teacher_code: teacherCode,
-    p_password: password
-  });
+  /*
+   * Login แบบใหม่
+   * เมื่อรหัสผ่านถูกต้อง Supabase จะออก Session Token ให้
+   */
+  const { data, error } = await supabaseClient.rpc(
+    'login_teacher_session',
+    {
+      p_teacher_code: teacherCode,
+      p_password: password
+    }
+  );
 
-  if(error) throw error;
+  if(error){
+    throw error;
+  }
 
-  if(!data || data.ok !== true || !data.user){
-    throw new Error(data?.message || 'รหัสผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+  if(
+    !data ||
+    data.ok !== true ||
+    !data.user ||
+    !data.session_token
+  ){
+    throw new Error(
+      data?.message ||
+      'รหัสผู้ใช้หรือรหัสผ่านไม่ถูกต้อง'
+    );
   }
 
   const user = data.user || {};
-  const code = String(user.teacher_code || '').toUpperCase();
 
+  const code =
+    String(user.teacher_code || '')
+      .trim()
+      .toUpperCase();
+
+  /*
+   * TeacherPR อนุญาตเฉพาะ T
+   */
   if(!isTeacherPageAllowed(code)){
-    throw new Error('หน้านี้อนุญาตเฉพาะครูรหัส T เท่านั้น');
+
+    /*
+     * ถ้า Login ผ่านแต่เป็นบัญชี G/L
+     * revoke session ที่เพิ่งสร้างทันที
+     */
+    try{
+      await supabaseClient.rpc(
+        'logout_teacher_session',
+        {
+          p_token: data.session_token
+        }
+      );
+    }catch(error){
+      console.warn(
+        'REVOKE INVALID TEACHER SESSION SKIPPED',
+        error
+      );
+    }
+
+    throw new Error(
+      'หน้านี้อนุญาตเฉพาะครูรหัส T เท่านั้น'
+    );
   }
 
   return {
-    id: user.id || '',
-    teacher_code: user.teacher_code || '',
-    first_name: user.first_name || '',
-    last_name: user.last_name || '',
-    full_name:
-      user.full_name ||
-      [user.first_name || '', user.last_name || ''].join(' ').trim() ||
-      user.teacher_code,
-    role_prefix: code.charAt(0),
-    teacher_role: 'teacher',
-    is_active: user.is_active !== false
+
+    user: {
+      id: user.id || '',
+
+      teacher_code:
+        user.teacher_code || '',
+
+      first_name:
+        user.first_name || '',
+
+      last_name:
+        user.last_name || '',
+
+      full_name:
+        user.full_name ||
+        [
+          user.first_name || '',
+          user.last_name || ''
+        ].join(' ').trim() ||
+        user.teacher_code,
+
+      role_prefix:
+        code.charAt(0),
+
+      teacher_role:
+        'teacher',
+
+      account_type:
+        user.account_type || 'teacher',
+
+      is_active:
+        true
+    },
+
+    sessionToken:
+      String(data.session_token || ''),
+
+    expiresAt:
+      data.expires_at || null
   };
 }
 
@@ -15299,6 +15372,9 @@ async function loginWithTeacherRpc(teacherCodeRaw, passwordRaw){
 
 const state = {
   currentUser: null,
+
+  teacherSessionToken: null,
+  teacherSessionExpiresAt: null,
 
   adviserRetestRows: [],
 adviserRetestActiveFilter: 'all',
@@ -16534,55 +16610,270 @@ function getSettingTerm(settingName, fallback = null){
   return safeNum(setting?.term) ?? fallback;
 }
 
-    function saveSession(){
-      if(!state.currentUser) return;
-      sessionStorage.setItem('teacherPageUser', JSON.stringify(state.currentUser));
+const TEACHER_USER_SESSION_KEY =
+  'teacherPageUser';
+
+const TEACHER_TOKEN_SESSION_KEY =
+  'teacherPageSessionToken';
+
+const TEACHER_EXPIRES_SESSION_KEY =
+  'teacherPageSessionExpiresAt';
+
+
+function clearTeacherSessionStorage(){
+
+  try{
+    sessionStorage.removeItem(
+      TEACHER_USER_SESSION_KEY
+    );
+
+    sessionStorage.removeItem(
+      TEACHER_TOKEN_SESSION_KEY
+    );
+
+    sessionStorage.removeItem(
+      TEACHER_EXPIRES_SESSION_KEY
+    );
+
+  }catch(error){
+    console.warn(
+      'CLEAR TEACHER SESSION STORAGE SKIPPED',
+      error
+    );
+  }
+}
+
+
+function saveSession(){
+
+  if(
+    !state.currentUser ||
+    !state.teacherSessionToken
+  ){
+    return;
+  }
+
+  sessionStorage.setItem(
+    TEACHER_USER_SESSION_KEY,
+    JSON.stringify(state.currentUser)
+  );
+
+  /*
+   * Token เก็บเฉพาะ sessionStorage
+   * ห้ามนำไปเก็บ localStorage
+   */
+  sessionStorage.setItem(
+    TEACHER_TOKEN_SESSION_KEY,
+    state.teacherSessionToken
+  );
+
+  if(state.teacherSessionExpiresAt){
+
+    sessionStorage.setItem(
+      TEACHER_EXPIRES_SESSION_KEY,
+      String(state.teacherSessionExpiresAt)
+    );
+
+  }else{
+
+    sessionStorage.removeItem(
+      TEACHER_EXPIRES_SESSION_KEY
+    );
+
+  }
+}
+
+
+/*
+ * Restore จะไม่เชื่อ user ที่เก็บใน Browser
+ * แต่ส่ง token กลับไปให้ฐานข้อมูลตรวจใหม่
+ */
+async function restoreSession(){
+
+  try{
+
+    const token =
+      String(
+        sessionStorage.getItem(
+          TEACHER_TOKEN_SESSION_KEY
+        ) || ''
+      ).trim();
+
+
+    if(!token){
+
+      clearTeacherSessionStorage();
+
+      return false;
     }
 
-    function restoreSession(){
-      try{
-        const raw = sessionStorage.getItem('teacherPageUser');
-        if(!raw) return false;
 
-        state.currentUser = JSON.parse(raw);
-
-        if(!isTeacherPageAllowed(state.currentUser.teacher_code)){
-          sessionStorage.removeItem('teacherPageUser');
-          return false;
+    const { data, error } =
+      await supabaseClient.rpc(
+        'get_teacher_session_context',
+        {
+          p_token: token
         }
+      );
 
-        el('loginView').classList.add('hidden');
-        el('appView').classList.remove('hidden');
 
-        if(el('currentUserBox')){
-          el('currentUserBox').innerHTML =
-            `${escapeHtml(state.currentUser.teacher_code)} ${escapeHtml(state.currentUser.full_name)}`;
-        }
-
-        if(el('homeUserName')){
-          el('homeUserName').textContent = `คุณครู ${state.currentUser.full_name}`;
-        }
-
-        updateSidebarUserInfo();
-
-        return true;
-      }catch(e){
-        sessionStorage.removeItem('teacherPageUser');
-        return false;
-      }
+    if(error){
+      throw error;
     }
+
+
+    if(
+      !data ||
+      data.ok !== true ||
+      !data.user
+    ){
+
+      clearTeacherSessionStorage();
+
+      return false;
+    }
+
+
+    const user = data.user;
+
+    const code =
+      String(
+        user.teacher_code || ''
+      )
+      .trim()
+      .toUpperCase();
+
+
+    if(!isTeacherPageAllowed(code)){
+
+      clearTeacherSessionStorage();
+
+      return false;
+    }
+
+
+    /*
+     * ใช้ user ที่ฐานข้อมูลคืนมาใหม่
+     * ไม่เชื่อ user เดิมจาก sessionStorage
+     */
+    state.currentUser = {
+
+      id:
+        user.id || '',
+
+      teacher_code:
+        user.teacher_code || '',
+
+      first_name:
+        user.first_name || '',
+
+      last_name:
+        user.last_name || '',
+
+      full_name:
+        user.full_name ||
+        [
+          user.first_name || '',
+          user.last_name || ''
+        ].join(' ').trim() ||
+        user.teacher_code,
+
+      role_prefix:
+        code.charAt(0),
+
+      teacher_role:
+        'teacher',
+
+      account_type:
+        user.account_type || 'teacher',
+
+      is_active:
+        true
+    };
+
+
+    state.teacherSessionToken =
+      token;
+
+    state.teacherSessionExpiresAt =
+      data.expires_at || null;
+
+
+    /*
+     * บันทึก user เวอร์ชันล่าสุด
+     */
+    saveSession();
+
+
+    el('loginView')
+      .classList.add('hidden');
+
+    el('appView')
+      .classList.remove('hidden');
+
+
+    if(el('currentUserBox')){
+
+      el('currentUserBox').innerHTML =
+        `${escapeHtml(
+          state.currentUser.teacher_code
+        )} ${escapeHtml(
+          state.currentUser.full_name
+        )}`;
+
+    }
+
+
+    if(el('homeUserName')){
+
+      el('homeUserName').textContent =
+        `คุณครู ${state.currentUser.full_name}`;
+
+    }
+
+
+    updateSidebarUserInfo();
+
+    return true;
+
+
+  }catch(error){
+
+    console.warn(
+      'RESTORE TEACHER SESSION ERROR',
+      error
+    );
+
+    state.currentUser = null;
+    state.teacherSessionToken = null;
+    state.teacherSessionExpiresAt = null;
+
+    clearTeacherSessionStorage();
+
+    return false;
+  }
+}
 
     async function login(){
       setStatus('loginStatus','กำลังตรวจสอบสิทธิ์...','info');
 
       try{
-        const user = await loginWithTeacherRpc(
-          el('loginTeacherCode').value,
-          el('loginPassword').value
-        );
+const loginResult =
+  await loginWithTeacherRpc(
+    el('loginTeacherCode').value,
+    el('loginPassword').value
+  );
 
-        state.currentUser = user;
-        saveSession();
+state.currentUser =
+  loginResult.user;
+
+state.teacherSessionToken =
+  loginResult.sessionToken;
+
+state.teacherSessionExpiresAt =
+  loginResult.expiresAt;
+
+saveSession();
 
         el('loginView').classList.add('hidden');
         el('appView').classList.remove('hidden');
@@ -16619,74 +16910,189 @@ function getSettingTerm(settingName, fallback = null){
       }
     }
 
-function logout(){
+async function logout(){
+
   if(!shouldLeaveMidtermPage('ออกจากระบบ', () => {
     logout();
   })){
     return;
   }
 
-  state.currentUser = null;
-      state.groupedOfferings = [];
-      state.selectedTeachingGroup = null;
-      state.previewRows = [];
-      state.previewMeta = null;
-      state.previewFilter = 'all';
+  /*
+   * เก็บ token ไว้ก่อนล้าง state
+   */
+  const token = String(
+    state.teacherSessionToken || ''
+  ).trim();
 
-state.adviserRooms = [];
-state.adviserStudents = [];
-state.selectedAdviserRoomKey = '';
 
-state.retestRows = [];
-state.retestEditingId = null;
+  /*
+   * Revoke Session ที่ Supabase
+   *
+   * ถึง revoke ไม่สำเร็จจาก network error
+   * ก็ยังต้อง logout ฝั่งเครื่องต่อ
+   */
+  if(token){
+    try{
 
-state.currentStudentProfile = null;
-state.currentStudentGrades = [];
-state.currentStudentSummary = null;
+      const { error } = await supabaseClient.rpc(
+        'logout_teacher_session',
+        {
+          p_token: token
+        }
+      );
 
-state.teacherStudentOptions = { subjectGroups: [] };
-state.teacherStudentRows = [];
-state.teacherStudentCurrentStudent = null;
-state.teacherStudentCurrentGrades = [];
-state.teacherStudentCurrentSummary = null;
-state.teacherStudentCurrentTermKey = 'overview';
-if(state.teacherStudentGpaChart){
-  state.teacherStudentGpaChart.destroy();
-  state.teacherStudentGpaChart = null;
-}
-if(state.teacherStudentRadarChart){
-  state.teacherStudentRadarChart.destroy();
-  state.teacherStudentRadarChart = null;
-}
-
-state.teacherStudentClassRows = [];
-state.teacherStudentCompareRows = [];
-
-      sessionStorage.removeItem('teacherPageUser');
-      el('appView').classList.add('hidden');
-      el('loginView').classList.remove('hidden');
-      el('loginPassword').value = '';
-      setStatus('loginStatus','ออกจากระบบแล้ว','info');
-
-      clearPreview();
-      renderAdviserRoomOptions([]);
-      renderAdviserStudents([]);
-      resetAdviserSummary();
-      resetStudentDetail();
-      resetRetestPage();
-      fpResetPage();
-
-      el('appShell')?.classList.remove('sidebar-collapsed');
-      el('appShell')?.classList.remove('mobile-sidebar-open');
-
-      if(el('sidebarUserName')){
-        el('sidebarUserName').textContent = 'ครูผู้สอน';
+      if(error){
+        throw error;
       }
 
-      if(el('sidebarUserCode')){
-        el('sidebarUserCode').textContent = 'Teacher';
-      }
+    }catch(error){
+
+      console.warn(
+        'LOGOUT SESSION REVOKE ERROR',
+        error
+      );
+
     }
+  }
+
+
+  /*
+   * =====================================================
+   * ล้าง State เดิมของ TeacherPR
+   * =====================================================
+   */
+
+  state.currentUser = null;
+
+  state.teacherSessionToken = null;
+  state.teacherSessionExpiresAt = null;
+
+  state.groupedOfferings = [];
+  state.selectedTeachingGroup = null;
+  state.previewRows = [];
+  state.previewMeta = null;
+  state.previewFilter = 'all';
+
+  state.adviserRooms = [];
+  state.adviserStudents = [];
+  state.selectedAdviserRoomKey = '';
+
+  state.retestRows = [];
+  state.retestEditingId = null;
+
+  state.currentStudentProfile = null;
+  state.currentStudentGrades = [];
+  state.currentStudentSummary = null;
+
+  state.teacherStudentOptions = {
+    subjectGroups: []
+  };
+
+  state.teacherStudentRows = [];
+  state.teacherStudentCurrentStudent = null;
+  state.teacherStudentCurrentGrades = [];
+  state.teacherStudentCurrentSummary = null;
+  state.teacherStudentCurrentTermKey = 'overview';
+
+
+  if(state.teacherStudentGpaChart){
+    state.teacherStudentGpaChart.destroy();
+    state.teacherStudentGpaChart = null;
+  }
+
+
+  if(state.teacherStudentRadarChart){
+    state.teacherStudentRadarChart.destroy();
+    state.teacherStudentRadarChart = null;
+  }
+
+
+  state.teacherStudentClassRows = [];
+  state.teacherStudentCompareRows = [];
+
+
+  /*
+   * =====================================================
+   * ล้าง Session ใน Browser
+   * =====================================================
+   */
+
+  clearTeacherSessionStorage();
+
+
+  /*
+   * =====================================================
+   * กลับหน้า Login
+   * =====================================================
+   */
+
+  el('appView')
+    .classList.add('hidden');
+
+  el('loginView')
+    .classList.remove('hidden');
+
+
+  if(el('loginPassword')){
+    el('loginPassword').value = '';
+  }
+
+
+  setStatus(
+    'loginStatus',
+    'ออกจากระบบแล้ว',
+    'info'
+  );
+
+
+  /*
+   * =====================================================
+   * Reset หน้าต่าง ๆ ตามระบบเดิม
+   * =====================================================
+   */
+
+  clearPreview();
+
+  renderAdviserRoomOptions([]);
+  renderAdviserStudents([]);
+  resetAdviserSummary();
+
+  resetStudentDetail();
+  resetRetestPage();
+
+  fpResetPage();
+
+
+  /*
+   * =====================================================
+   * Reset Sidebar
+   * =====================================================
+   */
+
+  el('appShell')
+    ?.classList.remove(
+      'sidebar-collapsed'
+    );
+
+  el('appShell')
+    ?.classList.remove(
+      'mobile-sidebar-open'
+    );
+
+
+  if(el('sidebarUserName')){
+    el('sidebarUserName').textContent =
+      'ครูผู้สอน';
+  }
+
+
+  if(el('sidebarUserCode')){
+    el('sidebarUserCode').textContent =
+      'Teacher';
+  }
+
+}
 
     function shouldLeaveMidtermPage(actionText = 'เปลี่ยนหน้า', onConfirm = null){
   return confirmDiscardMidtermChanges(actionText, onConfirm);
@@ -42845,7 +43251,7 @@ applyAdviserRetestFiltersAndRender();
   }
 }
 
-    function init(){
+    async function init(){
       initDefaultFilters();
       bindEvents();
       resetAdviserSummary();
@@ -42853,7 +43259,7 @@ applyAdviserRetestFiltersAndRender();
       resetRetestPage();
 
 
-if(restoreSession()){
+if(await restoreSession()){
   setActivePage('home');
 
   loadImportSettingsFromSheet()
