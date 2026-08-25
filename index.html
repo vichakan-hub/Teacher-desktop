@@ -21041,59 +21041,192 @@ if(el('studentDetailOverviewCompareTbody')){
       return dedupePayloadRows(rawPayload);
     }
 
-    async function doSaveImportedPreview(){
-      try{
-        const payload = buildUpsertPayload();
+async function doSaveImportedPreview(){
+  try{
 
-        setStatus('previewStatus','กำลังบันทึกผลการเรียนเข้า Supabase...','info');
+    /*
+     * =====================================================
+     * 1) ตรวจ Session
+     * =====================================================
+     */
 
-        const { error } = await supabaseClient
-          .from('grade_results')
-          .upsert(payload, {
-            onConflict: 'subject_offering_id,student_id'
-          });
-
-        if(error) throw error;
-
-        const studentCodesForCache = getStudentCodesFromGradePayload(payload);
-
-        setStatus(
-          'previewStatus',
-          `บันทึกผลการเรียนสำเร็จ ${payload.length} รายการ กำลังอัปเดตข้อมูลสำหรับ StudentPR...`,
-          'info'
-        );
-
-        const cacheResult = await refreshStudentGradeReportCacheForStudentCodes(
-          studentCodesForCache,
-          'previewStatus'
-        );
-
-        if(cacheResult.ok){
-          setStatus(
-            'previewStatus',
-            `บันทึกสำเร็จ ${payload.length} รายการ และอัปเดต StudentPR แล้ว ${cacheResult.refreshed} คน`,
-            'success'
-          );
-
-          showToast(
-            'บันทึกสำเร็จ',
-            `เพิ่มหรืออัปเดตผลการเรียน ${payload.length} รายการ และอัปเดต StudentPR แล้ว`,
-            'success'
-          );
-        }else{
-          // บันทึก grade_results สำเร็จแล้ว แต่ cache บางคนไม่สำเร็จ
-          // ไม่ throw เพื่อไม่ให้ผู้ใช้เข้าใจผิดว่าการบันทึกผลการเรียนล้มเหลว
-          console.warn('StudentPR cache refresh partial failure', cacheResult);
-        }
-
-        el('pvStatus').textContent = 'รายงานแล้ว';
-
-        await loadImportTeachingList();
-      }catch(err){
-        setStatus('previewStatus', err.message || 'บันทึกไม่สำเร็จ', 'error');
-        showToast('บันทึกไม่สำเร็จ', err.message || 'เกิดข้อผิดพลาด', 'error');
-      }
+    if(!state.teacherSessionToken){
+      throw new Error(
+        'Session หมดอายุ กรุณาเข้าสู่ระบบใหม่'
+      );
     }
+
+
+    /*
+     * =====================================================
+     * 2) สร้าง payload เหมือนเดิม
+     *
+     * buildUpsertPayload() ยังไม่ต้องแก้
+     * RPC ฝั่ง Database จะเลือกเชื่อเฉพาะ field
+     * ที่จำเป็น และหา teacher/subject/meta ใหม่เอง
+     * =====================================================
+     */
+
+    const payload = buildUpsertPayload();
+
+
+    if(!payload.length){
+      throw new Error(
+        'ไม่พบข้อมูลผลการเรียนสำหรับบันทึก'
+      );
+    }
+
+
+    setStatus(
+      'previewStatus',
+      'กำลังบันทึกผลการเรียนเข้า Supabase...',
+      'info'
+    );
+
+
+    /*
+     * =====================================================
+     * 3) บันทึกผ่าน Session-secured RPC
+     *
+     * เดิม:
+     * .from('grade_results').upsert(...)
+     *
+     * ใหม่:
+     * teacher_upsert_grade_results_session()
+     * =====================================================
+     */
+
+    const { data, error } = await supabaseClient.rpc(
+      'teacher_upsert_grade_results_session',
+      {
+        p_token: state.teacherSessionToken,
+        p_rows: payload
+      }
+    );
+
+
+    if(error){
+      throw error;
+    }
+
+
+    /*
+     * RPC อาจตอบกลับได้โดยไม่มี PostgREST error
+     * แต่ ok = false เช่น Session หมดอายุ
+     */
+    if(
+      !data ||
+      data.ok !== true
+    ){
+      throw new Error(
+        data?.message ||
+        'บันทึกผลการเรียนไม่สำเร็จ'
+      );
+    }
+
+
+    const savedCount =
+      Number(data.saved_count) ||
+      payload.length;
+
+
+    /*
+     * =====================================================
+     * 4) อัปเดต StudentPR Cache เหมือนระบบเดิม
+     * =====================================================
+     */
+
+    const studentCodesForCache =
+      getStudentCodesFromGradePayload(payload);
+
+
+    setStatus(
+      'previewStatus',
+      `บันทึกผลการเรียนสำเร็จ ${savedCount} รายการ กำลังอัปเดตข้อมูลสำหรับ StudentPR...`,
+      'info'
+    );
+
+
+    const cacheResult =
+      await refreshStudentGradeReportCacheForStudentCodes(
+        studentCodesForCache,
+        'previewStatus'
+      );
+
+
+    /*
+     * =====================================================
+     * 5) แสดงผลสำเร็จ
+     * =====================================================
+     */
+
+    if(cacheResult.ok){
+
+      setStatus(
+        'previewStatus',
+        `บันทึกสำเร็จ ${savedCount} รายการ และอัปเดต StudentPR แล้ว ${cacheResult.refreshed} คน`,
+        'success'
+      );
+
+
+      showToast(
+        'บันทึกสำเร็จ',
+        `เพิ่มหรืออัปเดตผลการเรียน ${savedCount} รายการ และอัปเดต StudentPR แล้ว`,
+        'success'
+      );
+
+    }else{
+
+      /*
+       * grade_results บันทึกสำเร็จแล้ว
+       * แต่ StudentPR cache บางคนไม่สำเร็จ
+       *
+       * ไม่ throw เพราะไม่ต้องการให้ครูเข้าใจว่า
+       * การบันทึกเกรดทั้งหมดล้มเหลว
+       */
+      console.warn(
+        'StudentPR cache refresh partial failure',
+        cacheResult
+      );
+
+    }
+
+
+    el('pvStatus').textContent =
+      'รายงานแล้ว';
+
+
+    /*
+     * โหลดรายการสอนใหม่
+     */
+    await loadImportTeachingList();
+
+
+  }catch(err){
+
+    console.error(
+      'SAVE GRADE RESULTS ERROR',
+      err
+    );
+
+
+    setStatus(
+      'previewStatus',
+      err.message ||
+      'บันทึกไม่สำเร็จ',
+      'error'
+    );
+
+
+    showToast(
+      'บันทึกไม่สำเร็จ',
+      err.message ||
+      'เกิดข้อผิดพลาด',
+      'error'
+    );
+
+  }
+}
 
     async function saveImportedPreview(){
       try{
