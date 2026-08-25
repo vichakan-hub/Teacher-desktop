@@ -43324,12 +43324,18 @@ async function loadTeacherGradeStatOptions(){
 
     setStatus('gradeStatsStatus', 'กำลังโหลดตัวเลือกสถิติผลการเรียน...', 'info');
 
-    const { data, error } = await supabaseClient.rpc(
-      'get_teacher_grade_stat_options',
-      {
-        p_teacher_id: state.currentUser.id
-      }
-    );
+if(!state.teacherSessionToken){
+  throw new Error(
+    'Session หมดอายุ กรุณาเข้าสู่ระบบใหม่'
+  );
+}
+
+const { data, error } = await supabaseClient.rpc(
+  'get_teacher_grade_stat_options_session',
+  {
+    p_token: state.teacherSessionToken
+  }
+);
 
     if(error) throw error;
 
