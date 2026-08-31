@@ -19112,30 +19112,86 @@ function openRetestCancelSubmissionOverlay(row){
 }
 
 async function cancelRetestSubmission(row){
+
+  /*
+   * =====================================================
+   * 1) ตรวจรายการ
+   * =====================================================
+   */
+
   if(!row?.retest_request_id){
+
     throw new Error(
       'ไม่พบรายการผลสอบแก้ตัวที่ต้องการยกเลิก'
     );
+
   }
 
-  if(row.retest_request_status !== 'pending_approval'){
+
+  if(
+    row.retest_request_status !==
+    'pending_approval'
+  ){
+
     throw new Error(
       'ยกเลิกการส่งได้เฉพาะรายการที่อยู่ระหว่างรออนุมัติ'
     );
+
   }
 
+
+  /*
+   * =====================================================
+   * 2) ตรวจ Session Token
+   * =====================================================
+   */
+
+  const token =
+    String(
+      state.teacherSessionToken || ''
+    ).trim();
+
+
+  if(!token){
+
+    throw new Error(
+      'Session หมดอายุ กรุณาเข้าสู่ระบบใหม่'
+    );
+
+  }
+
+
+  /*
+   * =====================================================
+   * 3) ใช้ Overlay ยืนยันเดิมของ TeacherPR Desktop
+   * =====================================================
+   */
+
   const confirmed =
-    await openRetestCancelSubmissionOverlay(row);
+    await openRetestCancelSubmissionOverlay(
+      row
+    );
+
 
   if(!confirmed){
+
     setStatus(
       'retestStatus',
       'ยกเลิกการดำเนินการแล้ว',
       'info'
     );
 
+
     return false;
+
   }
+
+
+  /*
+   * =====================================================
+   * 4) แจ้งสถานะ
+   * =====================================================
+   */
 
   setStatus(
     'retestStatus',
@@ -19143,34 +19199,80 @@ async function cancelRetestSubmission(row){
     'info'
   );
 
-  const { data, error } = await supabaseClient
-    .from('grade_retest_requests')
-    .update({
-      is_active: false,
-      updated_at: new Date().toISOString()
-    })
-    .eq('id', row.retest_request_id)
-    .eq('status', 'pending_approval')
-    .eq('is_active', true)
-    .select('id')
-    .maybeSingle();
-
-  if(error){
-    throw error;
-  }
 
   /*
-   * ป้องกันกรณีนายทะเบียนอนุมัติรายการ
-   * ในเวลาเดียวกับที่ครูกดยกเลิก
+   * =====================================================
+   * 5) เรียก Session-secured RPC
+   *
+   * Browser ส่งเพียง:
+   * - opaque token
+   * - request id
+   *
+   * Database จะตรวจ:
+   * - session
+   * - teacher_id
+   * - is_active
+   * - pending_approval
+   * เองทั้งหมด
+   * =====================================================
    */
-  if(!data?.id){
-    throw new Error(
-      'ไม่สามารถยกเลิกการส่งได้ ' +
-      'รายการอาจได้รับการอนุมัติหรือมีการเปลี่ยนสถานะแล้ว'
+
+  const { data, error } =
+    await supabaseClient.rpc(
+      'teacher_cancel_retest_request_session',
+      {
+
+        p_token:
+          token,
+
+        p_request_id:
+          row.retest_request_id
+
+      }
     );
+
+
+  if(error){
+
+    throw error;
+
   }
 
-  state.retestEditingId = null;
+
+  const result =
+    Array.isArray(data)
+      ? data[0]
+      : data;
+
+
+  /*
+   * =====================================================
+   * 6) Database ปฏิเสธ
+   * =====================================================
+   */
+
+  if(
+    !result ||
+    result.ok !== true
+  ){
+
+    throw new Error(
+      result?.message ||
+      'ไม่สามารถยกเลิกการส่งผลสอบแก้ตัวได้'
+    );
+
+  }
+
+
+  /*
+   * =====================================================
+   * 7) สำเร็จ
+   * =====================================================
+   */
+
+  state.retestEditingId =
+    null;
+
 
   showToast(
     'ยกเลิกการส่งแล้ว',
@@ -19178,7 +19280,15 @@ async function cancelRetestSubmission(row){
     'success'
   );
 
+
+  /*
+   * =====================================================
+   * 8) โหลดรายการใหม่
+   * =====================================================
+   */
+
   await loadRetestRows();
+
 
   setStatus(
     'retestStatus',
@@ -19186,7 +19296,9 @@ async function cancelRetestSubmission(row){
     'success'
   );
 
+
   return true;
+
 }
 
 async function saveRetestRequest(rowKey){
