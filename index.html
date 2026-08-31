@@ -19190,67 +19190,234 @@ async function cancelRetestSubmission(row){
 }
 
 async function saveRetestRequest(rowKey){
+
   try{
-    const row = findRetestRowByKey(rowKey);
+
+    /*
+     * =====================================================
+     * 1) หารายการ
+     * =====================================================
+     */
+
+    const row =
+      findRetestRowByKey(rowKey);
+
 
     if(!row){
-      throw new Error('ไม่พบรายการที่ต้องการส่งผลสอบแก้ตัว');
+
+      throw new Error(
+        'ไม่พบรายการที่ต้องการส่งผลสอบแก้ตัว'
+      );
+
     }
 
-    if(row.retest_request_status === 'approved'){
-      throw new Error('รายการนี้อนุมัติแล้ว ไม่สามารถแก้ไขได้');
+
+    if(
+      row.retest_request_status ===
+      'approved'
+    ){
+
+      throw new Error(
+        'รายการนี้อนุมัติแล้ว ไม่สามารถแก้ไขได้'
+      );
+
     }
 
-const selectedGrade = getRetestSelectedValue(rowKey);
 
-if(!selectedGrade){
-  throw new Error('กรุณาเลือกผลการเรียนแก้ตัวก่อนกดส่งผล');
-}
+    /*
+     * =====================================================
+     * 2) ตรวจ Session Token
+     * =====================================================
+     */
 
-/*
- * คำสั่งยกเลิกการส่งต้องแยกออกจากค่าเกรด
- * ไม่ส่งเข้า buildRetestRequestPayload()
- */
-if(selectedGrade === '__cancel_submission__'){
-  await cancelRetestSubmission(row);
-  return;
-}
+    const token =
+      String(
+        state.teacherSessionToken || ''
+      ).trim();
 
-const payload = buildRetestRequestPayload(row, selectedGrade);
 
-    setStatus('retestStatus', 'กำลังส่งผลสอบแก้ตัว...', 'info');
+    if(!token){
 
-    let error = null;
+      throw new Error(
+        'Session หมดอายุ กรุณาเข้าสู่ระบบใหม่'
+      );
 
-    if(row.retest_request_id){
-      const result = await supabaseClient
-        .from('grade_retest_requests')
-        .update({
-          requested_retest_grade_code: payload.requested_retest_grade_code,
-          status: 'pending_approval',
-          updated_at: payload.updated_at,
-
-          rejected_at: null,
-          rejected_by: null,
-          rejected_reason: null,
-
-          is_active: true
-        })
-        .eq('id', row.retest_request_id)
-        .eq('is_active', true);
-
-      error = result.error;
-    }else{
-      const result = await supabaseClient
-        .from('grade_retest_requests')
-        .insert(payload);
-
-      error = result.error;
     }
 
-    if(error) throw error;
 
-    state.retestEditingId = null;
+    /*
+     * =====================================================
+     * 3) อ่านค่าจาก Dropdown แบบ RAW ก่อน
+     *
+     * เพื่อแยกคำสั่ง __cancel_submission__
+     * ออกจากค่าเกรด
+     * =====================================================
+     */
+
+    const select =
+      document.querySelector(
+        `[data-retest-select="${CSS.escape(
+          String(rowKey)
+        )}"]`
+      );
+
+
+    const selectedRaw =
+      String(
+        select?.value || ''
+      ).trim();
+
+
+    if(!selectedRaw){
+
+      throw new Error(
+        'กรุณาเลือกผลการเรียนแก้ตัวก่อนกดส่งผล'
+      );
+
+    }
+
+
+    /*
+     * =====================================================
+     * 4) ยกเลิกการส่ง
+     *
+     * C.2 จะย้าย cancelRetestSubmission()
+     * ไป Secure RPC
+     * =====================================================
+     */
+
+    if(
+      selectedRaw ===
+      '__cancel_submission__'
+    ){
+
+      await cancelRetestSubmission(
+        row
+      );
+
+      return;
+
+    }
+
+
+    /*
+     * =====================================================
+     * 5) Normalize เกรด
+     * =====================================================
+     */
+
+    const selectedGrade =
+      normalizeGradeValue(
+        selectedRaw
+      );
+
+
+    const originalGrade =
+      normalizeGradeValue(
+        row.grade_code
+      );
+
+
+    if(!row.grade_result_id){
+
+      throw new Error(
+        'ไม่พบ grade_result_id ของรายการนี้'
+      );
+
+    }
+
+
+    /*
+     * Validation ฝั่งหน้าเว็บ
+     *
+     * Database จะตรวจซ้ำอีกครั้ง
+     */
+    if(
+      !isValidRetestGradeByOriginalGrade(
+        originalGrade,
+        selectedGrade
+      )
+    ){
+
+      throw new Error(
+        `ผลแก้ตัวไม่ถูกต้อง: เกรดเดิม ${originalGrade} ` +
+        `ไม่สามารถแก้เป็น ${selectedGrade}`
+      );
+
+    }
+
+
+    /*
+     * =====================================================
+     * 6) เรียก Secure RPC
+     *
+     * Browser ส่งเพียง:
+     * - opaque token
+     * - grade_result_id
+     * - ผลแก้ตัว
+     * =====================================================
+     */
+
+    setStatus(
+      'retestStatus',
+      'กำลังส่งผลสอบแก้ตัว...',
+      'info'
+    );
+
+
+    const { data, error } =
+      await supabaseClient.rpc(
+        'teacher_submit_retest_request_session',
+        {
+
+          p_token:
+            token,
+
+          p_grade_result_id:
+            row.grade_result_id,
+
+          p_requested_grade:
+            selectedGrade
+
+        }
+      );
+
+
+    if(error){
+
+      throw error;
+
+    }
+
+
+    const result =
+      Array.isArray(data)
+        ? data[0]
+        : data;
+
+
+    if(
+      !result ||
+      result.ok !== true
+    ){
+
+      throw new Error(
+        result?.message ||
+        'ส่งผลสอบแก้ตัวไม่สำเร็จ'
+      );
+
+    }
+
+
+    /*
+     * =====================================================
+     * 7) สำเร็จ
+     * =====================================================
+     */
+
+    state.retestEditingId =
+      null;
+
 
     showToast(
       'ส่งผลสอบแก้ตัวแล้ว',
@@ -19258,18 +19425,47 @@ const payload = buildRetestRequestPayload(row, selectedGrade);
       'success'
     );
 
+
     await loadRetestRows();
+
 
     setStatus(
       'retestStatus',
       'ส่งผลสอบแก้ตัวเรียบร้อยแล้ว สถานะ: รออนุมัติ',
       'success'
     );
+
+
   }catch(err){
-    console.error('saveRetestRequest ERROR', err);
-    setStatus('retestStatus', err.message || 'ส่งผลสอบแก้ตัวไม่สำเร็จ', 'error');
-    showToast('ส่งผลไม่สำเร็จ', err.message || 'เกิดข้อผิดพลาด', 'error');
+
+    console.error(
+      'saveRetestRequest ERROR',
+      err
+    );
+
+
+    const msg =
+      err?.message ||
+      err?.details ||
+      err?.hint ||
+      'ส่งผลสอบแก้ตัวไม่สำเร็จ';
+
+
+    setStatus(
+      'retestStatus',
+      msg,
+      'error'
+    );
+
+
+    showToast(
+      'ส่งผลไม่สำเร็จ',
+      msg,
+      'error'
+    );
+
   }
+
 }
 
 function getRetestFilterLabel(filterKey){
