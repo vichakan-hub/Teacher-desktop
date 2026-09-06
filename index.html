@@ -22571,83 +22571,219 @@ title="${escapeHtml(tooltip)}">
     });
   });
 }
-        async function fetchStudentGrades(studentId, academicYear, term){
-      let query = supabaseClient
-        .from('grade_results')
-        .select(`
-          id,
-          student_id,
-          student_code,
-          student_name,
-          student_no,
-          academic_year,
-          term,
-          class_level,
-          room,
-          study_unit_score,
-          midterm_score,
-          final_score,
-          total_score,
-          grade_code,
-          retest_grade_code,
-          grading_status,
-          is_active,
-          subject_offering_id,
-          subject_id,
-          teacher_id,
-          subjects:subjects!fk_grade_results_subject (
-            subject_code,
-            subject_name,
-            credit,
-            learning_area,
-            subject_type
-          ),
-          teachers:teachers!fk_grade_results_teacher (
-            teacher_code,
-            full_name
-          )
-        `)
-        .eq('student_id', studentId)
-        .eq('is_active', true)
-        .order('academic_year', { ascending:false })
-        .order('term', { ascending:false });
 
-      if(academicYear !== null && academicYear !== undefined){
-        query = query.eq('academic_year', academicYear);
+
+    async function fetchStudentGrades(
+  studentId,
+  academicYear,
+  term
+){
+  const token =
+    String(
+      state.teacherSessionToken || ''
+    ).trim();
+
+  if(!token){
+    throw new Error(
+      'ไม่พบ Teacher Session Token กรุณาเข้าสู่ระบบใหม่'
+    );
+  }
+
+  const selectedRoom =
+    getSelectedAdviserRoom();
+
+  if(!selectedRoom){
+    throw new Error(
+      'ไม่พบข้อมูลห้องที่ปรึกษาที่เลือก'
+    );
+  }
+
+  const studentUuid =
+    String(
+      studentId || ''
+    ).trim();
+
+  if(!studentUuid){
+    throw new Error(
+      'ไม่พบรหัสนักเรียน'
+    );
+  }
+
+  const { data, error } =
+    await supabaseClient.rpc(
+      'teacher_get_adviser_student_grade_rows_session',
+      {
+        p_token:
+          token,
+
+        p_student_id:
+          studentUuid,
+
+        p_adviser_academic_year:
+          Number(selectedRoom.academic_year),
+
+        p_adviser_term:
+          Number(selectedRoom.term),
+
+        p_class_level:
+          String(
+            selectedRoom.class_level || ''
+          ).trim(),
+
+        p_room:
+          String(
+            selectedRoom.room || ''
+          ).trim()
       }
-      if(term !== null && term !== undefined){
-        query = query.eq('term', term);
-      }
+    );
 
-      const { data, error } = await query;
-      if(error) throw error;
+  if(error){
+    throw error;
+  }
 
-      return (data || []).map(row => ({
-        id: row.id,
-        student_id: row.student_id,
-        student_code: row.student_code,
-        student_name: row.student_name,
-        student_no: row.student_no,
-        academic_year: row.academic_year,
-        term: row.term,
-        class_level: row.class_level,
-        room: row.room,
-        study_unit_score: row.study_unit_score,
-        midterm_score: row.midterm_score,
-        final_score: row.final_score,
-        total_score: row.total_score,
-        grade_code: normalizeGradeValue(row.grade_code),
-        retest_grade_code: normalizeGradeValue(row.retest_grade_code),
-        grading_status: row.grading_status,
-        subject_code: safeText(row.subjects?.subject_code, ''),
-        subject_name: safeText(row.subjects?.subject_name, ''),
-        credit: safeNum(row.subjects?.credit) ?? 0,
-        learning_area: safeText(row.subjects?.learning_area, ''),
-        subject_type: safeText(row.subjects?.subject_type, ''),
-        teacher_code: safeText(row.teachers?.teacher_code, ''),
-        teacher_name: safeText(row.teachers?.full_name, '')
-      }));
-    }
+  let rows =
+    Array.isArray(data)
+      ? data
+      : [];
+
+
+  /*
+   * RPC คืนประวัติทั้งหมดของนักเรียน
+   * ถ้ามีการขอเฉพาะปี/เทอม ค่อย filter ฝั่ง JS
+   */
+
+  if(
+    academicYear !== null &&
+    academicYear !== undefined
+  ){
+    rows =
+      rows.filter(row =>
+        Number(row.academic_year) ===
+        Number(academicYear)
+      );
+  }
+
+  if(
+    term !== null &&
+    term !== undefined
+  ){
+    rows =
+      rows.filter(row =>
+        Number(row.term) ===
+        Number(term)
+      );
+  }
+
+
+  /*
+   * รักษารูปแบบ object เดิม
+   * เพื่อไม่ให้ Function อื่นต้องแก้
+   */
+
+  return rows.map(row => ({
+    id:
+      row.id,
+
+    student_id:
+      row.student_id,
+
+    student_code:
+      row.student_code,
+
+    student_name:
+      row.student_name,
+
+    student_no:
+      row.student_no,
+
+    academic_year:
+      row.academic_year,
+
+    term:
+      row.term,
+
+    class_level:
+      row.class_level,
+
+    room:
+      row.room,
+
+    study_unit_score:
+      row.study_unit_score,
+
+    midterm_score:
+      row.midterm_score,
+
+    final_score:
+      row.final_score,
+
+    total_score:
+      row.total_score,
+
+    grade_code:
+      normalizeGradeValue(
+        row.grade_code
+      ),
+
+    retest_grade_code:
+      normalizeGradeValue(
+        row.retest_grade_code
+      ),
+
+    grading_status:
+      row.grading_status,
+
+    subject_offering_id:
+      row.subject_offering_id,
+
+    subject_id:
+      row.subject_id,
+
+    teacher_id:
+      row.teacher_id,
+
+    subject_code:
+      safeText(
+        row.subject_code,
+        ''
+      ),
+
+    subject_name:
+      safeText(
+        row.subject_name,
+        ''
+      ),
+
+    credit:
+      safeNum(
+        row.credit
+      ) ?? 0,
+
+    learning_area:
+      safeText(
+        row.learning_area,
+        ''
+      ),
+
+    subject_type:
+      safeText(
+        row.subject_type,
+        ''
+      ),
+
+    teacher_code:
+      safeText(
+        row.teacher_code,
+        ''
+      ),
+
+    teacher_name:
+      safeText(
+        row.teacher_name,
+        ''
+      )
+  }));
+}
 
     async function fetchTeacherStudentClassGrades(student, termGroups){
   const studentId = student?.id;
