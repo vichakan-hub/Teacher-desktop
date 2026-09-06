@@ -21217,6 +21217,8 @@ if(el('studentDetailOverviewCompareTbody')){
       const extra = warnRows.length > 8 ? `\nและอีก ${warnRows.length - 8} รายการ` : '';
       return `พบรายการแจ้งเตือน ${warnRows.length} รายการ\nต้องการบันทึกต่อหรือไม่\n\n${lines.join('\n')}${extra}`;
     }
+
+    
         function dedupePayloadRows(rows){
       const map = new Map();
       rows.forEach(row => {
@@ -21226,62 +21228,9 @@ if(el('studentDetailOverviewCompareTbody')){
       return Array.from(map.values());
     }
 
-    async function refreshStudentGradeReportCacheForStudentCodes(studentCodes, statusId = 'previewStatus'){
-      const codes = [...new Set((studentCodes || []).map(code => safeText(code, '')).filter(Boolean))];
 
-      if(!codes.length){
-        return { ok:true, refreshed:0, failed:0 };
-      }
 
-      const errors = [];
 
-      for(const studentCode of codes){
-        const { error } = await supabaseClient.rpc('refresh_student_grade_report_cache', {
-          p_student_code: studentCode
-        });
-
-        if(error){
-          errors.push({
-            studentCode,
-            message: error.message || error.details || error.hint || 'refresh cache ไม่สำเร็จ'
-          });
-        }
-      }
-
-      if(errors.length){
-        console.warn('refresh_student_grade_report_cache ERRORS', errors);
-
-        if(statusId){
-          setStatus(
-            statusId,
-            `บันทึกผลการเรียนสำเร็จ แต่อัปเดต cache สำหรับ StudentPR ไม่สำเร็จ ${errors.length}/${codes.length} คน`,
-            'warn'
-          );
-        }
-
-        showToast(
-          'บันทึกสำเร็จ แต่ cache ยังไม่ครบ',
-          `อัปเดตข้อมูล StudentPR ไม่สำเร็จ ${errors.length}/${codes.length} คน`,
-          'warn'
-        );
-
-        return {
-          ok:false,
-          refreshed: codes.length - errors.length,
-          failed: errors.length,
-          errors
-        };
-      }
-
-      return { ok:true, refreshed:codes.length, failed:0 };
-    }
-
-    function getStudentCodesFromGradePayload(payload){
-      return [...new Set((payload || [])
-        .map(row => safeText(row.student_code, ''))
-        .filter(Boolean)
-      )];
-    }
 
     function buildUpsertPayload(){
       ensureSelectedTeachingGroupReady();
@@ -21438,66 +21387,30 @@ async function doSaveImportedPreview(){
       payload.length;
 
 
-    /*
+       /*
      * =====================================================
-     * 4) อัปเดต StudentPR Cache เหมือนระบบเดิม
+     * 4) StudentPR cache ถูก Refresh ฝั่ง Database แล้ว
+     *
+     * teacher_upsert_grade_results_session()
+     * จัดการ Refresh cache ของนักเรียนที่ได้รับผลกระทบ
+     * หลัง UPSERT ทุก row เสร็จแล้ว
+     *
+     * Browser ไม่ต้องเรียก legacy Refresh RPC ซ้ำ
      * =====================================================
      */
-
-    const studentCodesForCache =
-      getStudentCodesFromGradePayload(payload);
-
 
     setStatus(
       'previewStatus',
-      `บันทึกผลการเรียนสำเร็จ ${savedCount} รายการ กำลังอัปเดตข้อมูลสำหรับ StudentPR...`,
-      'info'
+      `บันทึกผลการเรียนสำเร็จ ${savedCount} รายการ และอัปเดต StudentPR เรียบร้อยแล้ว`,
+      'success'
     );
 
 
-    const cacheResult =
-      await refreshStudentGradeReportCacheForStudentCodes(
-        studentCodesForCache,
-        'previewStatus'
-      );
-
-
-    /*
-     * =====================================================
-     * 5) แสดงผลสำเร็จ
-     * =====================================================
-     */
-
-    if(cacheResult.ok){
-
-      setStatus(
-        'previewStatus',
-        `บันทึกสำเร็จ ${savedCount} รายการ และอัปเดต StudentPR แล้ว ${cacheResult.refreshed} คน`,
-        'success'
-      );
-
-
-      showToast(
-        'บันทึกสำเร็จ',
-        `เพิ่มหรืออัปเดตผลการเรียน ${savedCount} รายการ และอัปเดต StudentPR แล้ว`,
-        'success'
-      );
-
-    }else{
-
-      /*
-       * grade_results บันทึกสำเร็จแล้ว
-       * แต่ StudentPR cache บางคนไม่สำเร็จ
-       *
-       * ไม่ throw เพราะไม่ต้องการให้ครูเข้าใจว่า
-       * การบันทึกเกรดทั้งหมดล้มเหลว
-       */
-      console.warn(
-        'StudentPR cache refresh partial failure',
-        cacheResult
-      );
-
-    }
+    showToast(
+      'บันทึกสำเร็จ',
+      `เพิ่มหรืออัปเดตผลการเรียน ${savedCount} รายการเรียบร้อยแล้ว`,
+      'success'
+    );
 
 
     el('pvStatus').textContent =
