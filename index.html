@@ -21795,6 +21795,97 @@ async function doSaveImportedPreview(){
   return rows;
 }
 
+async function fetchAdviserGradeRowsSecure(
+  academicYear,
+  term,
+  classLevel,
+  room
+){
+  const token =
+    String(
+      state.teacherSessionToken || ''
+    ).trim();
+
+  if(!token){
+    throw new Error(
+      'ไม่พบ Teacher Session Token กรุณาเข้าสู่ระบบใหม่'
+    );
+  }
+
+  const year =
+    Number(academicYear);
+
+  const termNo =
+    Number(term);
+
+  const targetClass =
+    String(
+      classLevel || ''
+    ).trim();
+
+  const targetRoom =
+    String(
+      room || ''
+    ).trim();
+
+  if(
+    !Number.isFinite(year) ||
+    !Number.isFinite(termNo) ||
+    !targetClass ||
+    !targetRoom
+  ){
+    throw new Error(
+      'ข้อมูลปีการศึกษา ภาคเรียน ชั้น หรือห้องไม่ครบ'
+    );
+  }
+
+  const rows =
+    await fetchAllPages(
+      () =>
+        supabaseClient
+          .rpc(
+            'teacher_get_adviser_grade_rows_session',
+            {
+              p_token:
+                token,
+
+              p_academic_year:
+                year,
+
+              p_term:
+                termNo,
+
+              p_class_level:
+                targetClass,
+
+              p_room:
+                targetRoom
+            }
+          )
+          .order(
+            'student_id',
+            { ascending:true }
+          )
+          .order(
+            'academic_year',
+            { ascending:true }
+          )
+          .order(
+            'term',
+            { ascending:true }
+          )
+          .order(
+            'grade_result_id',
+            { ascending:true }
+          ),
+      1000
+    );
+
+  return Array.isArray(rows)
+    ? rows
+    : [];
+}
+
     function getOrderedRiskGrades(grades){
   const order = ['0', 'ร', 'มส', 'มผ'];
   const unique = [...new Set((grades || []).map(normalizeGradeValue).filter(Boolean))];
