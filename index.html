@@ -22117,142 +22117,135 @@ async function fetchStudentGradeFlags(
   return map;
 }
 
-async function fetchAdviserStudentGpaMap(studentIds){
-  const ids = [
-    ...new Set(
-      (studentIds || [])
-        .filter(Boolean)
-        .map(String)
-    )
-  ];
-
+async function fetchAdviserStudentGpaMap(
+  gradeRows
+){
   const map = new Map();
 
-  if(!ids.length){
-    return map;
-  }
+  const rows =
+    Array.isArray(gradeRows)
+      ? gradeRows
+      : [];
+
 
   /*
-   * ลดจำนวนคนต่อรอบ
-   * เพื่อไม่ให้ผลการเรียนรวมเกิน 1,000 แถวง่ายเกินไป
+   * สร้างรายการนักเรียนจาก Secure Rows
    */
-  const chunkSize = 15;
+  rows.forEach(row => {
 
-  for(let i = 0; i < ids.length; i += chunkSize){
-    const idChunk = ids.slice(
-      i,
-      i + chunkSize
-    );
-
-    /*
-     * สร้างข้อมูลเริ่มต้นให้นักเรียนทุกคน
-     */
-    idChunk.forEach(studentId => {
-      const key = String(studentId);
-
-      if(!map.has(key)){
-        map.set(key, {
-          totalPoint: 0,
-          totalCredit: 0,
-          gpa: null
-        });
-      }
-    });
-
-    const rows = await fetchAllPages(() => {
-      return supabaseClient
-        .from('grade_results')
-        .select(`
-          id,
-          student_id,
-          grade_code,
-          retest_grade_code,
-          is_active,
-          subjects:subjects!fk_grade_results_subject (
-            credit,
-            subject_type
-          )
-        `)
-        .in('student_id', idChunk)
-        .eq('is_active', true)
-
-        /*
-         * สำคัญมาก:
-         * ต้องเรียงข้อมูลก่อนใช้ range แบ่งหน้า
-         */
-        .order('student_id', {
-          ascending: true
-        })
-        .order('id', {
-          ascending: true
-        });
-    }, 1000);
-
-    (rows || []).forEach(row => {
-      const studentId = String(
-        row.student_id || ''
+    const studentId =
+      String(
+        row?.student_id || ''
       );
 
-      if(!studentId){
-        return;
-      }
+    if(!studentId){
+      return;
+    }
 
-      const subjectType = safeText(
-        row.subjects?.subject_type,
+    if(!map.has(studentId)){
+      map.set(studentId, {
+        totalPoint: 0,
+        totalCredit: 0,
+        gpa: null
+      });
+    }
+
+  });
+
+
+  /*
+   * คำนวณ GPA
+   * คง logic เดิมของ TeacherPR
+   */
+  rows.forEach(row => {
+
+    const studentId =
+      String(
+        row?.student_id || ''
+      );
+
+    if(!studentId){
+      return;
+    }
+
+
+    const subjectType =
+      safeText(
+        row.subject_type,
         ''
       );
 
-      const isCreditSubject =
-        subjectType.includes('พื้นฐาน') ||
-        subjectType.includes('เพิ่มเติม');
 
-      if(!isCreditSubject){
-        return;
-      }
+    const isCreditSubject =
+      subjectType.includes('พื้นฐาน') ||
+      subjectType.includes('เพิ่มเติม');
 
-      const effectiveGrade =
-        normalizeGradeValue(
-          row.retest_grade_code ||
-          row.grade_code
-        );
+    if(!isCreditSubject){
+      return;
+    }
 
-      const numericGrade =
-        getNumericGradeForGpa(
-          effectiveGrade
-        );
 
-      if(numericGrade === null){
-        return;
-      }
+    /*
+     * ถ้ามีเกรดแก้ตัว ใช้เกรดแก้ตัว
+     * ไม่เช่นนั้นใช้เกรดเดิม
+     */
+    const effectiveGrade =
+      normalizeGradeValue(
+        row.retest_grade_code ||
+        row.grade_code
+      );
 
-      const credit =
-        safeNum(row.subjects?.credit) ?? 0;
 
-      if(credit <= 0){
-        return;
-      }
+    const numericGrade =
+      getNumericGradeForGpa(
+        effectiveGrade
+      );
 
-      const item = map.get(studentId);
+    if(numericGrade === null){
+      return;
+    }
 
-      if(!item){
-        return;
-      }
 
-      item.totalPoint +=
-        numericGrade * credit;
+    const credit =
+      safeNum(
+        row.credit
+      ) ?? 0;
 
-      item.totalCredit +=
-        credit;
-    });
-  }
+    if(credit <= 0){
+      return;
+    }
 
+
+    const item =
+      map.get(studentId);
+
+    if(!item){
+      return;
+    }
+
+
+    item.totalPoint +=
+      numericGrade * credit;
+
+    item.totalCredit +=
+      credit;
+
+  });
+
+
+  /*
+   * GPA สะสม
+   */
   map.forEach(item => {
+
     item.gpa =
       item.totalCredit > 0
         ? item.totalPoint /
           item.totalCredit
         : null;
+
   });
+
 
   return map;
 }
@@ -22361,7 +22354,7 @@ const gradeFlagsMap =
  */
 const gpaMap =
   await fetchAdviserStudentGpaMap(
-    studentIds
+    adviserGradeRows
   );
 
 state.adviserStudents = students.map(student => {
