@@ -25792,7 +25792,11 @@ function teacherStudentGetEntryFilterByClassLevel(classLevel, academicYear){
   return null;
 }
 
-async function fetchTeacherStudentCumulativeSummaryMap(studentIds){
+async function fetchTeacherStudentCumulativeSummaryMap(
+  studentIds,
+  group,
+  room
+){
   const ids = [
     ...new Set(
       (studentIds || [])
@@ -25801,120 +25805,292 @@ async function fetchTeacherStudentCumulativeSummaryMap(studentIds){
     )
   ];
 
-  const map = new Map();
+
+  const map =
+    new Map();
+
+
+  /*
+   * รักษาพฤติกรรมเดิม:
+   * สร้าง summary รอไว้ให้นักเรียน
+   * ที่อยู่ในรายการปัจจุบันทุกคน
+   */
+  ids.forEach(studentId => {
+
+    map.set(
+      studentId,
+      {
+        rows: []
+      }
+    );
+
+  });
+
 
   if(!ids.length){
     return map;
   }
 
+
   /*
-    ลดจำนวนคนต่อรอบ
-    ห้องหนึ่งคนละประมาณ 42 ผลการเรียน
-    15 คน ≈ 630 แถว ไม่เกิน 1,000 แถวต่อหน้า
-  */
-  const chunkSize = 15;
+   * =====================================================
+   * Validate context
+   * =====================================================
+   */
 
-  for(let i = 0; i < ids.length; i += chunkSize){
-    const idChunk = ids.slice(i, i + chunkSize);
+  const token =
+    String(
+      state.teacherSessionToken || ''
+    ).trim();
 
-    /*
-      สร้างกล่องรอไว้ให้นักเรียนทุกคนก่อน
-    */
-    idChunk.forEach(studentId => {
-      const key = String(studentId);
 
-      if(!map.has(key)){
-        map.set(key, {
-          rows: []
-        });
-      }
-    });
+  if(!token){
+    throw new Error(
+      'ไม่พบ Teacher Session Token กรุณาเข้าสู่ระบบใหม่'
+    );
+  }
 
-    const rows = await fetchAllPages(() => {
-      return supabaseClient
-        .from('grade_results')
-        .select(`
-          id,
-          student_id,
-          grade_code,
-          retest_grade_code,
-          subjects:subjects!fk_grade_results_subject (
-            credit,
-            subject_type
+
+  if(!group){
+    throw new Error(
+      'ไม่พบข้อมูลรายวิชาที่เลือก'
+    );
+  }
+
+
+  const subjectId =
+    String(
+      group.subject_id || ''
+    ).trim();
+
+
+  if(!subjectId){
+    throw new Error(
+      'ไม่พบ subject_id ของรายวิชาที่เลือก'
+    );
+  }
+
+
+  const academicYear =
+    safeNum(
+      group.academic_year
+    );
+
+
+  const term =
+    safeNum(
+      group.term
+    );
+
+
+  const classLevel =
+    safeText(
+      group.class_level,
+      ''
+    ).trim();
+
+
+  const teachingRoom =
+    safeText(
+      room,
+      ''
+    ).trim();
+
+
+  if(
+    academicYear === null ||
+    term === null ||
+    !classLevel ||
+    !teachingRoom
+  ){
+    throw new Error(
+      'ข้อมูลปี/เทอม/ชั้น/ห้องไม่ครบ'
+    );
+  }
+
+
+  /*
+   * =====================================================
+   * Secure RPC
+   *
+   * DB จะตรวจว่า Teacher Session คนนี้
+   * สอน subject/year/term/class/room นี้จริง
+   *
+   * จากนั้น DB จะหา cohort เอง
+   * Browser ไม่ส่ง student_id ไปกำหนดสิทธิ์
+   * =====================================================
+   */
+
+  const rows =
+    await fetchAllPages(
+      () =>
+        supabaseClient
+          .rpc(
+            'teacher_get_taught_class_cumulative_grade_rows_session',
+            {
+              p_token:
+                token,
+
+              p_subject_id:
+                subjectId,
+
+              p_academic_year:
+                academicYear,
+
+              p_term:
+                term,
+
+              p_class_level:
+                classLevel,
+
+              p_room:
+                teachingRoom
+            }
           )
-        `)
-        .in('student_id', idChunk)
-        .eq('is_active', true)
+          .order(
+            'student_id',
+            {
+              ascending: true
+            }
+          )
+          .order(
+            'id',
+            {
+              ascending: true
+            }
+          ),
+      1000
+    );
 
-        /*
-          สำคัญมาก:
-          กำหนดลำดับให้แน่นอนก่อนใช้ range แบ่งหน้า
-        */
-        .order('student_id', {
-          ascending: true
-        })
-        .order('id', {
-          ascending: true
-        });
-    }, 1000);
 
-    /*
-      นำผลการเรียนเข้ากล่องของนักเรียนแต่ละคน
-    */
-    (rows || []).forEach(row => {
-      const studentId = String(row.student_id || '');
+  /*
+   * =====================================================
+   * RPC คืนทั้ง cohort
+   *
+   * แต่หน้า TeacherPR อาจมี keyword search
+   * ทำให้ students เหลือเพียงบางคน
+   *
+   * จึงเก็บเฉพาะ studentIds
+   * ที่ caller ต้องการแสดงในรอบนี้
+   * เพื่อรักษาพฤติกรรมเดิม
+   * =====================================================
+   */
 
-      if(!studentId){
-        return;
-      }
+  const wantedIds =
+    new Set(ids);
 
-      if(!map.has(studentId)){
-        map.set(studentId, {
+
+  (rows || []).forEach(row => {
+
+    const studentId =
+      String(
+        row.student_id || ''
+      );
+
+
+    if(
+      !studentId ||
+      !wantedIds.has(studentId)
+    ){
+      return;
+    }
+
+
+    if(!map.has(studentId)){
+
+      map.set(
+        studentId,
+        {
           rows: []
-        });
-      }
+        }
+      );
 
-      map.get(studentId).rows.push({
-        grade_result_id: row.id,
+    }
 
-        grade_code: normalizeGradeValue(
-          row.grade_code
-        ),
 
-        retest_grade_code: normalizeGradeValue(
-          row.retest_grade_code
-        ),
+    map
+      .get(studentId)
+      .rows
+      .push({
+
+        grade_result_id:
+          row.id,
+
+        grade_code:
+          normalizeGradeValue(
+            row.grade_code
+          ),
+
+        retest_grade_code:
+          normalizeGradeValue(
+            row.retest_grade_code
+          ),
 
         credit:
-          safeNum(row.subjects?.credit) || 0,
+          safeNum(
+            row.credit
+          ) || 0,
 
         subject_type:
-          safeText(row.subjects?.subject_type, '')
+          safeText(
+            row.subject_type,
+            ''
+          )
+
       });
-    });
-  }
+
+  });
+
 
   /*
-    คำนวณ GPA สะสมของนักเรียนแต่ละคน
-  */
-  for(const [studentId, item] of map.entries()){
-    const studentRows = item.rows || [];
+   * =====================================================
+   * คำนวณเหมือน Function เดิมทุกจุด
+   *
+   * - GPA สะสม
+   * - grade_count
+   * - risk_count
+   * =====================================================
+   */
+
+  for(
+    const [studentId, item]
+    of map.entries()
+  ){
+
+    const studentRows =
+      item.rows || [];
+
 
     const summary =
-      buildStudentCourseSummary(studentRows);
+      buildStudentCourseSummary(
+        studentRows
+      );
 
-    const riskCount = studentRows.filter(row =>
-      isRiskGrade(
-        getEffectiveGrade(row)
-      )
-    ).length;
 
-    map.set(studentId, {
-      ...summary,
-      grade_count: studentRows.length,
-      risk_count: riskCount
-    });
+    const riskCount =
+      studentRows.filter(
+        row =>
+          isRiskGrade(
+            getEffectiveGrade(row)
+          )
+      ).length;
+
+
+    map.set(
+      studentId,
+      {
+        ...summary,
+
+        grade_count:
+          studentRows.length,
+
+        risk_count:
+          riskCount
+      }
+    );
+
   }
+
 
   return map;
 }
@@ -26051,7 +26227,12 @@ async function loadTeacherStudentRows(){
       });
     }
 
-    const summaryMap = await fetchTeacherStudentCumulativeSummaryMap(students.map(s => s.id));
+   const summaryMap =
+  await fetchTeacherStudentCumulativeSummaryMap(
+    students.map(s => s.id),
+    group,
+    room
+  );
 
     state.teacherStudentRows = students.map(student => {
       const summary = summaryMap.get(String(student.id)) || {
