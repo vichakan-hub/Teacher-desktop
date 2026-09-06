@@ -22778,6 +22778,513 @@ title="${escapeHtml(tooltip)}">
   }));
 }
 
+async function fetchTeacherStudentGradesTaughtSecure(
+  student
+){
+  const token =
+    String(
+      state.teacherSessionToken || ''
+    ).trim();
+
+  if(!token){
+    throw new Error(
+      'ไม่พบ Teacher Session Token กรุณาเข้าสู่ระบบใหม่'
+    );
+  }
+
+
+  const studentId =
+    String(
+      student?.id || ''
+    ).trim();
+
+  if(!studentId){
+    throw new Error(
+      'ไม่พบรหัสนักเรียน'
+    );
+  }
+
+
+  const group =
+    student?.current_subject_group;
+
+  if(!group){
+    throw new Error(
+      'ไม่พบข้อมูลรายวิชาที่กำลังสอน'
+    );
+  }
+
+
+  const room =
+    safeText(
+      student.current_teaching_room ||
+      student.current_room,
+      ''
+    ).trim();
+
+  if(!room){
+    throw new Error(
+      'ไม่พบห้องที่กำลังสอน'
+    );
+  }
+
+
+  const rows =
+    await fetchAllPages(
+      () =>
+        supabaseClient
+          .rpc(
+            'teacher_get_taught_student_grade_rows_session',
+            {
+              p_token:
+                token,
+
+              p_subject_id:
+                group.subject_id,
+
+              p_academic_year:
+                Number(
+                  group.academic_year
+                ),
+
+              p_term:
+                Number(
+                  group.term
+                ),
+
+              p_class_level:
+                String(
+                  group.class_level || ''
+                ).trim(),
+
+              p_room:
+                room,
+
+              p_student_id:
+                studentId
+            }
+          )
+          .order(
+            'academic_year',
+            { ascending:true }
+          )
+          .order(
+            'term',
+            { ascending:true }
+          )
+          .order(
+            'subject_code',
+            { ascending:true }
+          )
+          .order(
+            'id',
+            { ascending:true }
+          ),
+      1000
+    );
+
+
+  return (rows || []).map(row => ({
+
+    id:
+      row.id,
+
+    student_id:
+      row.student_id,
+
+    student_code:
+      safeText(
+        row.student_code,
+        ''
+      ),
+
+    student_name:
+      safeText(
+        row.student_name,
+        ''
+      ),
+
+    student_no:
+      row.student_no,
+
+    academic_year:
+      row.academic_year,
+
+    term:
+      row.term,
+
+    class_level:
+      safeText(
+        row.class_level,
+        ''
+      ),
+
+    room:
+      safeText(
+        row.room,
+        ''
+      ),
+
+    study_unit_score:
+      row.study_unit_score,
+
+    midterm_score:
+      row.midterm_score,
+
+    final_score:
+      row.final_score,
+
+    total_score:
+      row.total_score,
+
+    grade_code:
+      normalizeGradeValue(
+        row.grade_code
+      ),
+
+    retest_grade_code:
+      normalizeGradeValue(
+        row.retest_grade_code
+      ),
+
+    grading_status:
+      row.grading_status,
+
+    subject_offering_id:
+      row.subject_offering_id,
+
+    subject_id:
+      row.subject_id,
+
+    teacher_id:
+      row.teacher_id,
+
+    subject_code:
+      safeText(
+        row.subject_code,
+        ''
+      ),
+
+    subject_name:
+      safeText(
+        row.subject_name,
+        ''
+      ),
+
+    credit:
+      safeNum(
+        row.credit
+      ) ?? 0,
+
+    learning_area:
+      safeText(
+        row.learning_area,
+        ''
+      ),
+
+    subject_type:
+      safeText(
+        row.subject_type,
+        ''
+      ),
+
+    teacher_code:
+      safeText(
+        row.teacher_code,
+        ''
+      ),
+
+    teacher_name:
+      safeText(
+        row.teacher_name,
+        ''
+      )
+
+  }));
+}
+
+async function fetchTeacherStudentClassGradesTaughtSecure(
+  student,
+  termGroups
+){
+  const token =
+    String(
+      state.teacherSessionToken || ''
+    ).trim();
+
+  if(!token){
+    throw new Error(
+      'ไม่พบ Teacher Session Token กรุณาเข้าสู่ระบบใหม่'
+    );
+  }
+
+
+  const studentId =
+    String(
+      student?.id || ''
+    ).trim();
+
+  if(!studentId){
+    throw new Error(
+      'ไม่พบรหัสนักเรียน'
+    );
+  }
+
+
+  const group =
+    student?.current_subject_group;
+
+  if(!group){
+    throw new Error(
+      'ไม่พบข้อมูลรายวิชาที่กำลังสอน'
+    );
+  }
+
+
+  const teachingRoom =
+    safeText(
+      student.current_teaching_room ||
+      student.current_room,
+      ''
+    ).trim();
+
+  if(!teachingRoom){
+    throw new Error(
+      'ไม่พบห้องที่กำลังสอน'
+    );
+  }
+
+
+  /*
+   * ป้องกันเรียกซ้ำ context เดิม
+   */
+  const pairs =
+    [];
+
+  (termGroups || []).forEach(
+    termGroup => {
+
+      const academicYear =
+        safeNum(
+          termGroup.academic_year
+        );
+
+      const term =
+        safeNum(
+          termGroup.term
+        );
+
+      const classLevel =
+        safeText(
+          termGroup.class_level,
+          ''
+        ).trim();
+
+      const room =
+        safeText(
+          termGroup.room,
+          ''
+        ).trim();
+
+
+      if(
+        academicYear === null ||
+        term === null ||
+        !classLevel ||
+        !room
+      ){
+        return;
+      }
+
+
+      const key =
+        `${academicYear}|${term}|${classLevel}|${room}`;
+
+
+      if(
+        pairs.some(
+          item => item.key === key
+        )
+      ){
+        return;
+      }
+
+
+      pairs.push({
+        key,
+        academic_year:
+          academicYear,
+        term:
+          term,
+        class_level:
+          classLevel,
+        room
+      });
+
+    }
+  );
+
+
+  const allRows =
+    [];
+
+
+  for(const pair of pairs){
+
+    const rows =
+      await fetchAllPages(
+        () =>
+          supabaseClient
+            .rpc(
+              'teacher_get_taught_class_grade_rows_session',
+              {
+                p_token:
+                  token,
+
+                /*
+                 * ห้องที่ครูสอนจริง
+                 */
+                p_subject_id:
+                  group.subject_id,
+
+                p_teaching_academic_year:
+                  Number(
+                    group.academic_year
+                  ),
+
+                p_teaching_term:
+                  Number(
+                    group.term
+                  ),
+
+                p_teaching_class_level:
+                  String(
+                    group.class_level || ''
+                  ).trim(),
+
+                p_teaching_room:
+                  teachingRoom,
+
+                /*
+                 * นักเรียนที่กำลังเปิด
+                 */
+                p_student_id:
+                  studentId,
+
+                /*
+                 * ห้องย้อนหลังจากประวัติจริง
+                 */
+                p_target_academic_year:
+                  pair.academic_year,
+
+                p_target_term:
+                  pair.term,
+
+                p_target_class_level:
+                  pair.class_level,
+
+                p_target_room:
+                  pair.room
+              }
+            )
+            .order(
+              'student_id',
+              { ascending:true }
+            )
+            .order(
+              'subject_code',
+              { ascending:true }
+            )
+            .order(
+              'id',
+              { ascending:true }
+            ),
+        1000
+      );
+
+
+    (rows || []).forEach(row => {
+
+      allRows.push({
+
+        id:
+          row.id,
+
+        student_id:
+          row.student_id,
+
+        academic_year:
+          row.academic_year,
+
+        term:
+          row.term,
+
+        class_level:
+          safeText(
+            row.class_level,
+            ''
+          ),
+
+        room:
+          safeText(
+            row.room,
+            ''
+          ),
+
+        grade_code:
+          normalizeGradeValue(
+            row.grade_code
+          ),
+
+        retest_grade_code:
+          normalizeGradeValue(
+            row.retest_grade_code
+          ),
+
+        subject_code:
+          safeText(
+            row.subject_code,
+            ''
+          ),
+
+        subject_name:
+          safeText(
+            row.subject_name,
+            ''
+          ),
+
+        credit:
+          safeNum(
+            row.credit
+          ) ?? 0,
+
+        learning_area:
+          safeText(
+            row.learning_area,
+            ''
+          ),
+
+        subject_type:
+          safeText(
+            row.subject_type,
+            ''
+          ),
+
+        is_current_student:
+          String(
+            row.student_id
+          ) === studentId
+
+      });
+
+    });
+
+  }
+
+
+  return allRows;
+}
+
 async function fetchTeacherStudentClassGrades(
   student,
   termGroups
@@ -26841,14 +27348,21 @@ async function openTeacherStudentGradeOverlay(student){
   `;
 }
 
-    const rows = await fetchStudentGrades(student.id, null, null);
+    const rows =
+  await fetchTeacherStudentGradesTaughtSecure(
+    student
+  );
     state.teacherStudentCurrentGrades = rows || [];
 
     const courseSummary = buildStudentCourseSummary(rows || []);
     state.teacherStudentCurrentSummary = courseSummary;
 
 const termGroups = teacherStudentBuildTermGroups(rows || []);
-const classRows = await fetchTeacherStudentClassGrades(student, termGroups);
+const classRows =
+  await fetchTeacherStudentClassGradesTaughtSecure(
+    student,
+    termGroups
+  );
 state.teacherStudentClassRows = classRows || [];
 
 const compareRows = teacherStudentBuildCompareRows(rows || [], classRows || []);
