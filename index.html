@@ -21935,131 +21935,183 @@ function buildRepeatRiskSnapshotFromTermPlans(flag, termPlans){
   };
 }
     
-async function fetchStudentGradeFlags(studentIds, academicYear, term){
-  const ids = [...new Set((studentIds || []).filter(Boolean).map(String))];
-
-  if(!ids.length){
-    return new Map();
-  }
-
+async function fetchStudentGradeFlags(
+  gradeRows,
+  academicYear,
+  term
+){
   const map = new Map();
 
-  // กันทั้ง limit 1000 และกัน URL ยาวเกินไปจาก .in(student_id, ids)
-  const chunkSize = 80;
+  const rows =
+    Array.isArray(gradeRows)
+      ? gradeRows
+      : [];
 
-  for(let i = 0; i < ids.length; i += chunkSize){
-    const idChunk = ids.slice(i, i + chunkSize);
+  rows.forEach(row => {
 
-    const rows = await fetchAllPages(() => {
-      let query = supabaseClient
-        .from('grade_results')
-        .select('student_id, academic_year, term, grade_code, retest_grade_code')
-        .in('student_id', idChunk)
-        .eq('is_active', true)
-        .order('academic_year', { ascending:true })
-        .order('term', { ascending:true });
+    if(!row?.student_id){
+      return;
+    }
 
-      if(academicYear !== null && academicYear !== undefined){
-        query = query.eq('academic_year', academicYear);
+    if(
+      academicYear !== null &&
+      academicYear !== undefined &&
+      Number(row.academic_year) !== Number(academicYear)
+    ){
+      return;
+    }
+
+    if(
+      term !== null &&
+      term !== undefined &&
+      Number(row.term) !== Number(term)
+    ){
+      return;
+    }
+
+    const sid =
+      String(row.student_id);
+
+    const termKey =
+      `${row.academic_year}|${row.term}`;
+
+    const effectiveGrade =
+      normalizeGradeValue(
+        row.retest_grade_code ||
+        row.grade_code
+      );
+
+    if(!map.has(sid)){
+      map.set(sid, {
+        has_grade_result: false,
+        has_risk_grade: false,
+        grade_count: 0,
+        risk_grades: [],
+        repeat_risk_count: 0,
+        total_subject_count: 0,
+        repeat_risk_ratio: 0,
+        is_repeat_risk: false,
+        term_flags: {}
+      });
+    }
+
+    const item =
+      map.get(sid);
+
+    item.has_grade_result = true;
+    item.grade_count += 1;
+    item.total_subject_count += 1;
+
+    if(!item.term_flags[termKey]){
+      item.term_flags[termKey] = {
+        has_grade_result: false,
+        has_risk_grade: false,
+        grade_count: 0,
+        risk_grades: [],
+        repeat_risk_count: 0,
+        total_subject_count: 0,
+        repeat_risk_ratio: 0,
+        is_repeat_risk: false
+      };
+    }
+
+    const termFlag =
+      item.term_flags[termKey];
+
+    termFlag.has_grade_result = true;
+    termFlag.grade_count += 1;
+    termFlag.total_subject_count += 1;
+
+
+    /*
+     * ป้ายความเสี่ยง
+     * คง logic เดิมของ TeacherPR
+     */
+    if(isRiskGrade(effectiveGrade)){
+
+      item.has_risk_grade = true;
+      termFlag.has_risk_grade = true;
+
+      if(
+        !item.risk_grades.includes(
+          effectiveGrade
+        )
+      ){
+        item.risk_grades.push(
+          effectiveGrade
+        );
       }
 
-      if(term !== null && term !== undefined){
-        query = query.eq('term', term);
+      if(
+        !termFlag.risk_grades.includes(
+          effectiveGrade
+        )
+      ){
+        termFlag.risk_grades.push(
+          effectiveGrade
+        );
       }
+    }
 
-      return query;
-    });
 
-    rows.forEach(row => {
-      const sid = String(row.student_id);
-      const termKey = `${row.academic_year}|${row.term}`;
-      const effectiveGrade = normalizeGradeValue(row.retest_grade_code || row.grade_code);
+    /*
+     * คง behavior เดิมของ isRepeatRiskGrade()
+     * ไว้ก่อน ยังไม่เปลี่ยนเงื่อนไขในรอบนี้
+     */
+    if(isRepeatRiskGrade(effectiveGrade)){
+      item.repeat_risk_count += 1;
+      termFlag.repeat_risk_count += 1;
+    }
 
-      if(!map.has(sid)){
-        map.set(sid, {
-          has_grade_result: false,
-          has_risk_grade: false,
-          grade_count: 0,
-          risk_grades: [],
-          repeat_risk_count: 0,
-          total_subject_count: 0,
-          repeat_risk_ratio: 0,
-          is_repeat_risk: false,
-          term_flags: {}
-        });
-      }
+  });
 
-      const item = map.get(sid);
 
-      item.has_grade_result = true;
-      item.grade_count += 1;
-      item.total_subject_count += 1;
-
-      if(!item.term_flags[termKey]){
-        item.term_flags[termKey] = {
-          has_grade_result: false,
-          has_risk_grade: false,
-          grade_count: 0,
-          risk_grades: [],
-          repeat_risk_count: 0,
-          total_subject_count: 0,
-          repeat_risk_ratio: 0,
-          is_repeat_risk: false
-        };
-      }
-
-      const termFlag = item.term_flags[termKey];
-
-      termFlag.has_grade_result = true;
-      termFlag.grade_count += 1;
-      termFlag.total_subject_count += 1;
-
-      // ป้าย "เสี่ยง : ติด ..." นับ 0, ร, มส, มผ
-      if(isRiskGrade(effectiveGrade)){
-        item.has_risk_grade = true;
-        termFlag.has_risk_grade = true;
-
-        if(!item.risk_grades.includes(effectiveGrade)){
-          item.risk_grades.push(effectiveGrade);
-        }
-
-        if(!termFlag.risk_grades.includes(effectiveGrade)){
-          termFlag.risk_grades.push(effectiveGrade);
-        }
-      }
-
-      // ป้าย "เสี่ยงซ้ำชั้น" นับเฉพาะ 0, ร, มส ไม่รวม มผ
-      if(isRepeatRiskGrade(effectiveGrade)){
-        item.repeat_risk_count += 1;
-        termFlag.repeat_risk_count += 1;
-      }
-    });
-  }
+  /*
+   * คำนวณ Summary
+   */
 
   map.forEach(item => {
-    item.risk_grades = getOrderedRiskGrades(item.risk_grades);
 
-    item.repeat_risk_ratio = item.total_subject_count > 0
-      ? item.repeat_risk_count / item.total_subject_count
-      : 0;
+    item.risk_grades =
+      getOrderedRiskGrades(
+        item.risk_grades
+      );
+
+    item.repeat_risk_ratio =
+      item.total_subject_count > 0
+        ? item.repeat_risk_count /
+          item.total_subject_count
+        : 0;
 
     item.is_repeat_risk =
       item.total_subject_count > 0 &&
       item.repeat_risk_ratio >= 0.5;
 
-    Object.keys(item.term_flags || {}).forEach(termKey => {
-      const termFlag = item.term_flags[termKey];
 
-      termFlag.risk_grades = getOrderedRiskGrades(termFlag.risk_grades);
+    Object.keys(
+      item.term_flags || {}
+    ).forEach(termKey => {
 
-      termFlag.repeat_risk_ratio = termFlag.total_subject_count > 0
-        ? termFlag.repeat_risk_count / termFlag.total_subject_count
-        : 0;
+      const termFlag =
+        item.term_flags[termKey];
+
+      termFlag.risk_grades =
+        getOrderedRiskGrades(
+          termFlag.risk_grades
+        );
+
+      termFlag.repeat_risk_ratio =
+        termFlag.total_subject_count > 0
+          ? termFlag.repeat_risk_count /
+            termFlag.total_subject_count
+          : 0;
 
       termFlag.is_repeat_risk =
         termFlag.total_subject_count > 0 &&
         termFlag.repeat_risk_ratio >= 0.5;
+
     });
+
   });
 
   return map;
@@ -22281,9 +22333,36 @@ async function loadAdviserStudents(){
       });
     }
 
-const studentIds = students.map(s => s.id).filter(Boolean);
-const gradeFlagsMap = await fetchStudentGradeFlags(studentIds, null, null);
-const gpaMap = await fetchAdviserStudentGpaMap(studentIds);
+const studentIds =
+  students
+    .map(s => s.id)
+    .filter(Boolean);
+
+const adviserGradeRows =
+  studentIds.length
+    ? await fetchAdviserGradeRowsSecure(
+        targetYear,
+        safeNum(selectedRoom.term),
+        targetClass,
+        targetRoom
+      )
+    : [];
+
+const gradeFlagsMap =
+  await fetchStudentGradeFlags(
+    adviserGradeRows,
+    null,
+    null
+  );
+
+/*
+ * GPA ยังใช้ของเดิมก่อน
+ * จะย้ายในขั้นถัดไป
+ */
+const gpaMap =
+  await fetchAdviserStudentGpaMap(
+    studentIds
+  );
 
 state.adviserStudents = students.map(student => {
   const flag = gradeFlagsMap.get(String(student.id)) || {
