@@ -43611,147 +43611,248 @@ function isAdviserRetestRowInCurrentStage(
 }
 
 
-async function fetchAdviserRetestGradeHistory(adviserStudents){
-  const students = Array.isArray(adviserStudents)
-    ? adviserStudents
-    : [];
-
-  const studentIds = [
-    ...new Set(
-      students
-        .map(student =>
-          safeText(student.student_id, '')
-        )
-        .filter(Boolean)
-    )
-  ];
-
-  const studentCodes = [
-    ...new Set(
-      students
-        .map(student =>
-          normalizeAdviserRetestStudentCode(
-            student.student_code
-          )
-        )
-        .filter(Boolean)
-    )
-  ];
-
-  const gradeRowMap = new Map();
-
-  const selectColumns = `
-    id,
-    student_id,
-    student_code,
-    student_name,
-    student_no,
-    teacher_id,
-    academic_year,
-    term,
-    class_level,
-    room,
-    subject_code,
-    subject_name,
-    grade_code,
-    retest_grade_code,
-    is_active,
-
-    subjects:subjects!fk_grade_results_subject (
-      subject_code,
-      subject_name,
-      credit,
-      subject_type
-    ),
-
-    teachers:teachers!fk_grade_results_teacher (
-      teacher_code,
-      full_name
-    )
-  `;
+async function fetchAdviserRetestGradeHistory(
+  adviserStudents
+){
+  const students =
+    Array.isArray(adviserStudents)
+      ? adviserStudents
+      : [];
 
   /*
-   * โหลดข้อมูลทีละชุดและนำมารวมใน Map
-   * ใช้ grade_results.id ป้องกันข้อมูลซ้ำ
+   * ถ้าไม่มีนักเรียนในห้อง
+   * ไม่ต้องยิง RPC
    */
-  async function collectRowsByField(
-    fieldName,
-    values,
-    chunkSize = 25
-  ){
-    if(!values.length){
-      return;
-    }
+  if(!students.length){
+    return [];
+  }
 
-    for(
-      let index = 0;
-      index < values.length;
-      index += chunkSize
-    ){
-      const valueChunk = values.slice(
-        index,
-        index + chunkSize
-      );
 
-      const chunkRows = await fetchAllPages(() => {
-        return supabaseClient
-          .from('grade_results')
-          .select(selectColumns)
-          .in(fieldName, valueChunk)
-          .eq('is_active', true)
-          .in(
-            'grade_code',
-            ['0', 'ร', 'มส', 'มผ']
+  const token =
+    String(
+      state.teacherSessionToken || ''
+    ).trim();
+
+  if(!token){
+    throw new Error(
+      'ไม่พบ Teacher Session Token กรุณาเข้าสู่ระบบใหม่'
+    );
+  }
+
+
+  /*
+   * ห้องที่ปรึกษาที่กำลังเลือก
+   * ใช้เป็น authorization context ฝั่ง DB
+   */
+  const selectedRoom =
+    getSelectedAdviserRoom();
+
+  if(!selectedRoom){
+    throw new Error(
+      'ไม่พบห้องที่ปรึกษาที่เลือก'
+    );
+  }
+
+
+  /*
+   * Secure RPC
+   *
+   * ฝั่ง DB จะ:
+   * - validate teacher session
+   * - ตรวจสิทธิ์ teacher_advisers
+   * - หา cohort นักเรียน
+   * - ค้นย้อนหลังทั้ง student_id / student_code
+   * - จำกัดเฉพาะ 0, ร, มส, มผ
+   */
+  const rows =
+    await fetchAllPages(
+      () =>
+        supabaseClient
+          .rpc(
+            'teacher_get_adviser_retest_grade_rows_session',
+            {
+              p_token:
+                token,
+
+              p_academic_year:
+                Number(
+                  selectedRoom.academic_year
+                ),
+
+              p_term:
+                Number(
+                  selectedRoom.term
+                ),
+
+              p_class_level:
+                String(
+                  selectedRoom.class_level || ''
+                ).trim(),
+
+              p_room:
+                String(
+                  selectedRoom.room || ''
+                ).trim()
+            }
           )
           .order(
             'academic_year',
-            { ascending: false }
+            {
+              ascending: false
+            }
           )
           .order(
             'term',
-            { ascending: false }
+            {
+              ascending: false
+            }
+          )
+          .order(
+            'student_code',
+            {
+              ascending: true
+            }
+          )
+          .order(
+            'subject_code',
+            {
+              ascending: true
+            }
           )
           .order(
             'id',
-            { ascending: true }
-          );
-      }, 1000);
+            {
+              ascending: true
+            }
+          ),
+      1000
+    );
 
-      (chunkRows || []).forEach(row => {
-        if(!row?.id){
-          return;
-        }
 
-        gradeRowMap.set(
-          String(row.id),
-          row
-        );
-      });
+  /*
+   * แปลงกลับเป็น shape เดิม
+   *
+   * สำคัญ:
+   * ส่วน loadAdviserRetestTracking()
+   * ยังอ่าน row.subjects และ row.teachers
+   *
+   * จึงสร้าง nested object ให้เหมือน
+   * select relation ของ Supabase เดิม
+   */
+  return (rows || []).map(row => ({
+
+    id:
+      row.id,
+
+    student_id:
+      row.student_id,
+
+    student_code:
+      safeText(
+        row.student_code,
+        ''
+      ),
+
+    student_name:
+      safeText(
+        row.student_name,
+        ''
+      ),
+
+    student_no:
+      row.student_no,
+
+    teacher_id:
+      row.teacher_id,
+
+    academic_year:
+      row.academic_year,
+
+    term:
+      row.term,
+
+    class_level:
+      safeText(
+        row.class_level,
+        ''
+      ),
+
+    room:
+      safeText(
+        row.room,
+        ''
+      ),
+
+    subject_code:
+      safeText(
+        row.subject_code,
+        ''
+      ),
+
+    subject_name:
+      safeText(
+        row.subject_name,
+        ''
+      ),
+
+    grade_code:
+      normalizeGradeValue(
+        row.grade_code
+      ),
+
+    retest_grade_code:
+      normalizeGradeValue(
+        row.retest_grade_code
+      ),
+
+    is_active:
+      row.is_active,
+
+
+    /*
+     * compatibility กับโค้ดเดิม
+     */
+    subjects: {
+      subject_code:
+        safeText(
+          row.subject_code,
+          ''
+        ),
+
+      subject_name:
+        safeText(
+          row.subject_name,
+          ''
+        ),
+
+      credit:
+        safeNum(
+          row.credit
+        ) ?? 0,
+
+      subject_type:
+        safeText(
+          row.subject_type,
+          ''
+        )
+    },
+
+
+    teachers: {
+      teacher_code:
+        safeText(
+          row.teacher_code,
+          ''
+        ),
+
+      full_name:
+        safeText(
+          row.teacher_name,
+          ''
+        )
     }
-  }
 
-  /*
-   * รอบที่ 1:
-   * ค้นจาก student_id สำหรับข้อมูลปัจจุบัน
-   */
-  await collectRowsByField(
-    'student_id',
-    studentIds
-  );
-
-  /*
-   * รอบที่ 2:
-   * ค้นจาก student_code สำหรับข้อมูลเก่า
-   * ที่ student_id อาจยังเป็น null
-   */
-  await collectRowsByField(
-    'student_code',
-    studentCodes
-  );
-
-  return [
-    ...gradeRowMap.values()
-  ];
+  }));
 }
 
 
