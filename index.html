@@ -22785,80 +22785,279 @@ title="${escapeHtml(tooltip)}">
   }));
 }
 
-    async function fetchTeacherStudentClassGrades(student, termGroups){
-  const studentId = student?.id;
+async function fetchTeacherStudentClassGrades(
+  student,
+  termGroups
+){
+  const studentId =
+    String(
+      student?.id || ''
+    ).trim();
+
+  if(!studentId){
+    throw new Error(
+      'ไม่พบรหัสนักเรียนสำหรับโหลดค่าเฉลี่ยห้อง'
+    );
+  }
+
+
+  const token =
+    String(
+      state.teacherSessionToken || ''
+    ).trim();
+
+  if(!token){
+    throw new Error(
+      'ไม่พบ Teacher Session Token กรุณาเข้าสู่ระบบใหม่'
+    );
+  }
+
+
+  /*
+   * ห้องที่ปรึกษาปัจจุบัน
+   * ใช้สำหรับ authorization ฝั่ง DB
+   */
+  const adviserRoom =
+    getSelectedAdviserRoom();
+
+  if(!adviserRoom){
+    throw new Error(
+      'ไม่พบข้อมูลห้องที่ปรึกษาที่เลือก'
+    );
+  }
+
+
+  /*
+   * สร้างรายการ ปี/เทอม/ชั้น/ห้อง
+   * จากประวัติจริงของนักเรียน
+   */
   const classRoomPairs = [];
 
   (termGroups || []).forEach(group => {
-    const academicYear = safeNum(group.academic_year);
-    const term = safeNum(group.term);
-    const classLevel = safeText(group.class_level, '');
-    const room = safeText(group.room || student.current_teaching_room || student.current_room, '');
 
-    if(!academicYear || !term || !classLevel || !room) return;
+    const academicYear =
+      safeNum(
+        group.academic_year
+      );
 
-    const key = `${academicYear}|${term}|${classLevel}|${room}`;
-    if(!classRoomPairs.some(item => item.key === key)){
+    const term =
+      safeNum(
+        group.term
+      );
+
+    const classLevel =
+      safeText(
+        group.class_level,
+        ''
+      ).trim();
+
+    const room =
+      safeText(
+        group.room ||
+        student.current_teaching_room ||
+        student.current_room,
+        ''
+      ).trim();
+
+
+    if(
+      academicYear === null ||
+      term === null ||
+      !classLevel ||
+      !room
+    ){
+      return;
+    }
+
+
+    const key =
+      `${academicYear}|${term}|${classLevel}|${room}`;
+
+
+    if(
+      !classRoomPairs.some(
+        item => item.key === key
+      )
+    ){
       classRoomPairs.push({
         key,
-        academic_year: academicYear,
-        term,
-        class_level: classLevel,
-        room
+        academic_year:
+          academicYear,
+        term:
+          term,
+        class_level:
+          classLevel,
+        room:
+          room
       });
     }
+
   });
+
 
   const allRows = [];
 
+
+  /*
+   * โหลดทีละ context
+   *
+   * ใช้ fetchAllPages เพราะบางห้องอาจเกิน 1,000 แถว
+   */
   for(const pair of classRoomPairs){
-    const { data, error } = await supabaseClient
-      .from('grade_results')
-      .select(`
-        id,
-        student_id,
-        academic_year,
-        term,
-        class_level,
-        room,
-        grade_code,
-        retest_grade_code,
-        is_active,
-        subjects:subjects!fk_grade_results_subject (
-          subject_code,
-          subject_name,
-          credit,
-          learning_area,
-          subject_type
-        )
-      `)
-      .eq('academic_year', pair.academic_year)
-      .eq('term', pair.term)
-      .eq('class_level', pair.class_level)
-      .eq('room', pair.room)
-      .eq('is_active', true);
 
-    if(error) throw error;
+    const rows =
+      await fetchAllPages(
+        () =>
+          supabaseClient
+            .rpc(
+              'teacher_get_adviser_class_grade_rows_session',
+              {
+                p_token:
+                  token,
 
-    (data || []).forEach(row => {
+                p_student_id:
+                  studentId,
+
+                /*
+                 * Adviser authorization context
+                 */
+                p_adviser_academic_year:
+                  Number(
+                    adviserRoom.academic_year
+                  ),
+
+                p_adviser_term:
+                  Number(
+                    adviserRoom.term
+                  ),
+
+                p_adviser_class_level:
+                  String(
+                    adviserRoom.class_level || ''
+                  ).trim(),
+
+                p_adviser_room:
+                  String(
+                    adviserRoom.room || ''
+                  ).trim(),
+
+                /*
+                 * Historical class context
+                 */
+                p_target_academic_year:
+                  pair.academic_year,
+
+                p_target_term:
+                  pair.term,
+
+                p_target_class_level:
+                  pair.class_level,
+
+                p_target_room:
+                  pair.room
+              }
+            )
+            .order(
+              'student_id',
+              {
+                ascending: true
+              }
+            )
+            .order(
+              'subject_code',
+              {
+                ascending: true
+              }
+            )
+            .order(
+              'id',
+              {
+                ascending: true
+              }
+            ),
+        1000
+      );
+
+
+    (rows || []).forEach(row => {
+
       allRows.push({
-        id: row.id,
-        student_id: row.student_id,
-        academic_year: row.academic_year,
-        term: row.term,
-        class_level: row.class_level,
-        room: row.room,
-        grade_code: normalizeGradeValue(row.grade_code),
-        retest_grade_code: normalizeGradeValue(row.retest_grade_code),
-        subject_code: safeText(row.subjects?.subject_code, ''),
-        subject_name: safeText(row.subjects?.subject_name, ''),
-        credit: safeNum(row.subjects?.credit) ?? 0,
-        learning_area: safeText(row.subjects?.learning_area, ''),
-        subject_type: safeText(row.subjects?.subject_type, ''),
-        is_current_student: String(row.student_id) === String(studentId)
+
+        id:
+          row.id,
+
+        student_id:
+          row.student_id,
+
+        academic_year:
+          row.academic_year,
+
+        term:
+          row.term,
+
+        class_level:
+          safeText(
+            row.class_level,
+            ''
+          ),
+
+        room:
+          safeText(
+            row.room,
+            ''
+          ),
+
+        grade_code:
+          normalizeGradeValue(
+            row.grade_code
+          ),
+
+        retest_grade_code:
+          normalizeGradeValue(
+            row.retest_grade_code
+          ),
+
+        subject_code:
+          safeText(
+            row.subject_code,
+            ''
+          ),
+
+        subject_name:
+          safeText(
+            row.subject_name,
+            ''
+          ),
+
+        credit:
+          safeNum(
+            row.credit
+          ) ?? 0,
+
+        learning_area:
+          safeText(
+            row.learning_area,
+            ''
+          ),
+
+        subject_type:
+          safeText(
+            row.subject_type,
+            ''
+          ),
+
+        /*
+         * เก็บ behavior เดิม
+         */
+        is_current_student:
+          String(row.student_id) ===
+          studentId
       });
+
     });
+
   }
+
 
   return allRows;
 }
