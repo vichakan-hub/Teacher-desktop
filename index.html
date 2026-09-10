@@ -28549,8 +28549,8 @@ async function importExamEligibilityExcelFile(
     const group =
       state.selectedExamEligibilityGroup;
 
-    const rows =
-      state.examEligibilityRows || [];
+let rows =
+  state.examEligibilityRows || [];
 
 
     if(!group){
@@ -28560,6 +28560,22 @@ async function importExamEligibilityExcelFile(
       );
 
     }
+
+    /*
+ * ตรวจ Student Master ล่าสุดก่อนรับ Excel
+ */
+rows =
+  await refreshExamEligibilityRowsFromStudentMaster(
+    rows,
+    group
+  );
+
+
+state.examEligibilityRows =
+  rows;
+
+
+renderExamEligibilityStudentRows();
 
 
     if(!rows.length){
@@ -28743,11 +28759,10 @@ async function importExamEligibilityExcelFile(
 
     rows.forEach(row => {
 
-      const code =
-        String(
-          row.student_code ||
-          ''
-        ).trim();
+const code =
+  normalizeMidtermRosterStudentCode(
+    row.student_code
+  );
 
 
       if(code){
@@ -28786,15 +28801,17 @@ async function importExamEligibilityExcelFile(
       excelRow++
     ){
 
-      const studentCode =
-        String(
-          getExamEligibilityExcelCellValue(
-            worksheet.getCell(
-              excelRow,
-              2
-            )
-          ) ?? ''
-        ).trim();
+const studentCode =
+  normalizeMidtermRosterStudentCode(
+
+    getExamEligibilityExcelCellValue(
+      worksheet.getCell(
+        excelRow,
+        2
+      )
+    )
+
+  );
 
 
       if(!studentCode){
@@ -29090,13 +29107,18 @@ async function downloadExamEligibilityTemplateExcel(){
     const group =
       state.selectedExamEligibilityGroup;
 
-    const rows =
+
+    let rows =
       state.examEligibilityRows || [];
+
 
     const user =
       state.currentUser || {};
 
 
+    /*
+     * ต้องมีรายวิชาก่อน
+     */
     if(!group){
 
       throw new Error(
@@ -29104,6 +29126,24 @@ async function downloadExamEligibilityTemplateExcel(){
       );
 
     }
+
+
+    /*
+     * Refresh Student Master
+     * ก่อนสร้าง Excel Template
+     */
+    rows =
+      await refreshExamEligibilityRowsFromStudentMaster(
+        rows,
+        group
+      );
+
+
+    state.examEligibilityRows =
+      rows;
+
+
+    renderExamEligibilityStudentRows();
 
 
     if(!rows.length){
@@ -30227,7 +30267,21 @@ async function loadExamEligibilityTeachingList(){
         1000
       );
 
+/*
+ * =====================================================
+ * โหลด Student Master ล่าสุดสำหรับนักเรียน
+ * ที่อยู่ในรายงานกลางภาค
+ * =====================================================
+ */
 
+await fetchTeacherStudentMasterBySids(
+
+  (midtermRows || [])
+    .map(row =>
+      row.student_code
+    )
+
+);
     /*
      * เก็บนักเรียนแต่ละรายวิชา/ห้อง
      */
@@ -30237,6 +30291,59 @@ async function loadExamEligibilityTeachingList(){
 
     (midtermRows || [])
       .forEach(row => {
+
+            const studentCode =
+      normalizeMidtermRosterStudentCode(
+        row.student_code
+      );
+
+
+    const student =
+      getTeacherStudentMasterBySid(
+        studentCode
+      );
+
+
+    const studentInfo =
+      getTeacherStudentMasterInfo(
+        studentCode,
+        year
+      );
+
+
+    /*
+     * ตัดนักเรียนลาออก / ไม่พบ
+     */
+    if(
+      !student ||
+      !teacherIsCurrentStudent(
+        student
+      ) ||
+      !studentInfo
+    ){
+      return;
+    }
+
+
+    /*
+     * ต้องยังอยู่ชั้น/ห้องเดียวกับรายการนี้
+     */
+    if(
+      String(
+        studentInfo.class_level || ''
+      ) !==
+      String(
+        row.class_level || ''
+      ) ||
+      String(
+        studentInfo.room || ''
+      ) !==
+      String(
+        row.room || ''
+      )
+    ){
+      return;
+    }
 
         const key =
           getMidtermReportGroupKey(
@@ -30254,10 +30361,7 @@ async function loadExamEligibilityTeachingList(){
         }
 
 
-        const studentCode =
-          normalizeMidtermRosterStudentCode(
-            row.student_code
-          );
+
 
 
         if(studentCode){
@@ -30371,6 +30475,20 @@ const eligibilityRows =
   );
 
 
+    /*
+ * โหลด Student Master ล่าสุด
+ * สำหรับข้อมูลรายงาน มส ที่เคยบันทึก
+ */
+await fetchTeacherStudentMasterBySids(
+
+  (eligibilityRows || [])
+    .map(row =>
+      row.student_code
+    )
+
+);
+
+
 /*
  * Map:
  * key รายวิชา/ห้อง
@@ -30383,6 +30501,53 @@ const eligibilityReportMap =
 
 (eligibilityRows || [])
   .forEach(row => {
+
+        const studentCode =
+      normalizeMidtermRosterStudentCode(
+        row.student_code
+      );
+
+
+    const student =
+      getTeacherStudentMasterBySid(
+        studentCode
+      );
+
+
+    const studentInfo =
+      getTeacherStudentMasterInfo(
+        studentCode,
+        year
+      );
+
+
+    if(
+      !student ||
+      !teacherIsCurrentStudent(
+        student
+      ) ||
+      !studentInfo
+    ){
+      return;
+    }
+
+
+    if(
+      String(
+        studentInfo.class_level || ''
+      ) !==
+      String(
+        row.class_level || ''
+      ) ||
+      String(
+        studentInfo.room || ''
+      ) !==
+      String(
+        row.room || ''
+      )
+    ){
+      return;
+    }
 
     const key =
       getMidtermReportGroupKey(
@@ -30416,10 +30581,7 @@ const eligibilityReportMap =
       );
 
 
-    const studentCode =
-      normalizeMidtermRosterStudentCode(
-        row.student_code
-      );
+
 
 
     if(!studentCode){
@@ -33457,6 +33619,181 @@ state.selectedExamEligibilityGroup =
 
 }
 
+/* =========================================================
+   EXAM ELIGIBILITY + STUDENT MASTER
+
+   งานรายงาน มส เป็นข้อมูลปัจจุบัน
+   จึงแสดงเฉพาะนักเรียนที่:
+
+   1. ยังอยู่ใน students
+   2. student_status = เรียนอยู่
+   3. ชั้นตรงกับรายการสอนในปีที่เลือก
+   4. ห้องปัจจุบันตรงกับรายการสอน
+
+   ค่าเวลาเรียน / สถานะ มส เดิมยังคงมาจาก
+   exam_eligibility_reports
+   ========================================================= */
+
+async function refreshExamEligibilityRowsFromStudentMaster(
+  inputRows = state.examEligibilityRows,
+  group = state.selectedExamEligibilityGroup
+){
+
+  if(!group){
+    return [];
+  }
+
+
+  const rows =
+    Array.isArray(inputRows)
+      ? inputRows
+      : [];
+
+
+  if(!rows.length){
+    return [];
+  }
+
+
+  /*
+   * โหลด students ล่าสุดเฉพาะ SID
+   * ที่เกี่ยวข้องกับรายงานนี้
+   */
+  await fetchTeacherStudentMasterBySids(
+
+    rows.map(row =>
+      row.student_code
+    )
+
+  );
+
+
+  const result =
+    rows
+
+      .map(row => {
+
+        const studentCode =
+          normalizeMidtermRosterStudentCode(
+            row.student_code
+          );
+
+
+        if(!studentCode){
+          return null;
+        }
+
+
+        const student =
+          getTeacherStudentMasterBySid(
+            studentCode
+          );
+
+
+        /*
+         * ไม่พบ Student Master
+         */
+        if(!student){
+          return null;
+        }
+
+
+        /*
+         * รายงาน มส ปัจจุบัน
+         * ไม่รวมนักเรียนลาออก
+         */
+        if(
+          !teacherIsCurrentStudent(
+            student
+          )
+        ){
+          return null;
+        }
+
+
+        const studentInfo =
+          getTeacherStudentMasterInfo(
+            studentCode,
+            group.academic_year
+          );
+
+
+        if(!studentInfo){
+          return null;
+        }
+
+
+        /*
+         * ตรวจชั้น
+         */
+        if(
+          String(
+            studentInfo.class_level || ''
+          ) !==
+          String(
+            group.class_level || ''
+          )
+        ){
+          return null;
+        }
+
+
+        /*
+         * ตรวจห้องปัจจุบัน
+         */
+        if(
+          String(
+            studentInfo.room || ''
+          ) !==
+          String(
+            group.room || ''
+          )
+        ){
+          return null;
+        }
+
+
+        /*
+         * เวลาเรียน / exam_status
+         * จาก row เดิมยังอยู่ครบ
+         *
+         * Identity ใช้ students ล่าสุด
+         */
+        return {
+
+          ...row,
+
+          student_id:
+            studentInfo.id ||
+            row.student_id ||
+            null,
+
+          student_code:
+            studentInfo.sid ||
+            studentCode,
+
+          student_no:
+            studentInfo.student_no,
+
+          student_name:
+            studentInfo.student_name,
+
+          student_status:
+            studentInfo.student_status
+
+        };
+
+      })
+
+      .filter(Boolean);
+
+
+  return sortMidtermRosterStudents(
+    result
+  );
+
+}
+
 async function openExamEligibilityReport(
   group
 ){
@@ -33839,89 +34176,169 @@ state.examEligibilityAttendanceMax =
 
     syncExamEligibilityAttendanceMaxInput();
 
-    /* =====================================================
-       3. สร้างข้อมูลหน้า มส
-       ===================================================== */
+ /* =====================================================
+   3. สร้างข้อมูลหน้า มส
 
-    state.examEligibilityRows =
-      sortMidtermRosterStudents(
+   คะแนนเวลาเรียน / สถานะ มส
+   → exam_eligibility_reports
 
-sourceRows.map(report => {
+   ตัวตนนักเรียน
+   → students
+   ===================================================== */
 
-  const studentCode =
-    normalizeMidtermRosterStudentCode(
-      report.student_code
-    );
+const eligibilitySourceRows =
+  sourceRows.map(report => {
 
-
-  const oldEligibility =
-    oldEligibilityMap.get(
-      studentCode
-    ) ||
-    null;
-
-
-  return {
-
-    student_id:
-      report.student_id ||
-      null,
-
-    student_code:
-      studentCode,
-
-    student_no:
-      safeNum(
-        report.student_no
-      ),
-
-    student_name:
-      safeText(
-        report.student_name,
-        '-'
-      ),
-
-
-    attendance_score:
-      oldEligibility
-        ? safeNum(
-            oldEligibility
-              .attendance_score
-          )
-        : null,
-
-
-    attendance_max:
-      oldEligibility
-        ? safeNum(
-            oldEligibility
-              .attendance_max
-          )
-        : null,
-
-
-    attendance_percent:
-      oldEligibility
-        ? safeNum(
-            oldEligibility
-              .attendance_percent
-          )
-        : null,
-
-
-    exam_status:
-      safeText(
-        oldEligibility
-          ?.exam_status,
-        'eligible'
-      ) === 'ms'
-        ? 'ms'
-        : 'eligible'
-
-  };
-})
+    const studentCode =
+      normalizeMidtermRosterStudentCode(
+        report.student_code
       );
 
+
+    const oldEligibility =
+      oldEligibilityMap.get(
+        studentCode
+      ) ||
+      null;
+
+
+    return {
+
+      /*
+       * ใช้เป็น fallback ก่อน Student Master
+       */
+      student_id:
+        report.student_id ||
+        null,
+
+      student_code:
+        studentCode,
+
+      student_no:
+        safeNum(
+          report.student_no
+        ),
+
+      student_name:
+        safeText(
+          report.student_name,
+          '-'
+        ),
+
+
+      /*
+       * เวลาเรียนเดิม
+       */
+      attendance_score:
+        oldEligibility
+          ? safeNum(
+              oldEligibility
+                .attendance_score
+            )
+          : null,
+
+
+      attendance_max:
+        oldEligibility
+          ? safeNum(
+              oldEligibility
+                .attendance_max
+            )
+          : null,
+
+
+      attendance_percent:
+        oldEligibility
+          ? safeNum(
+              oldEligibility
+                .attendance_percent
+            )
+          : null,
+
+
+      /*
+       * สถานะรายงาน มส เดิม
+       */
+      exam_status:
+        safeText(
+          oldEligibility
+            ?.exam_status,
+          'eligible'
+        ) === 'ms'
+          ? 'ms'
+          : 'eligible'
+
+    };
+
+  });
+
+
+/*
+ * =====================================================
+ * ครอบ Student Master ล่าสุด
+ * =====================================================
+ */
+
+state.examEligibilityRows =
+  await refreshExamEligibilityRowsFromStudentMaster(
+    eligibilitySourceRows,
+    group
+  );
+/*
+ * รายงานกลางภาคอาจมีข้อมูลเก่า
+ * แต่ปัจจุบันไม่มีนักเรียนที่ยังเรียนอยู่ในห้องนี้แล้ว
+ */
+if(
+  !state.examEligibilityRows.length
+){
+
+  renderExamEligibilityStudentRows();
+
+
+  if(
+    el('saveExamEligibilityBtn')
+  ){
+    el(
+      'saveExamEligibilityBtn'
+    ).disabled =
+      true;
+  }
+
+
+  if(
+    el(
+      'downloadExamEligibilityTemplateBtn'
+    )
+  ){
+    el(
+      'downloadExamEligibilityTemplateBtn'
+    ).disabled =
+      true;
+  }
+
+
+  if(
+    el(
+      'importExamEligibilityExcelBtn'
+    )
+  ){
+    el(
+      'importExamEligibilityExcelBtn'
+    ).disabled =
+      true;
+  }
+
+
+  setStatus(
+    'examEligibilityFormStatus',
+    'ไม่พบนักเรียนที่กำลังเรียนอยู่ในชั้น/ห้องนี้ตามข้อมูล students ล่าสุด',
+    'warn'
+  );
+
+
+  return;
+
+}
 
 renderExamEligibilityStudentRows();
 
@@ -40338,8 +40755,8 @@ async function saveExamEligibilityReport(){
     const group =
       state.selectedExamEligibilityGroup;
 
-    const rows =
-      state.examEligibilityRows || [];
+let rows =
+  state.examEligibilityRows || [];
 
     const attendanceMax =
       safeNum(
@@ -40367,12 +40784,36 @@ async function saveExamEligibilityReport(){
       );
     }
 
+    /* =====================================================
+   ตรวจ Student Master ล่าสุดอีกครั้งก่อน Save จริง
+   ===================================================== */
 
-    if(!rows.length){
-      throw new Error(
-        'ไม่มีข้อมูลนักเรียนสำหรับบันทึก'
-      );
-    }
+rows =
+  await refreshExamEligibilityRowsFromStudentMaster(
+    rows,
+    group
+  );
+
+
+state.examEligibilityRows =
+  rows;
+
+
+/*
+ * Render ใหม่ เผื่อเลขที่/ชื่อเปลี่ยน
+ */
+renderExamEligibilityStudentRows();
+
+
+if(!rows.length){
+
+  throw new Error(
+    'ไม่มีนักเรียนที่กำลังเรียนอยู่ในชั้น/ห้องนี้สำหรับบันทึก'
+  );
+
+}
+
+
 
 
     if(
