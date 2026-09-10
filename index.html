@@ -15437,6 +15437,19 @@ async function loginWithTeacherRpc(teacherCodeRaw, passwordRaw){
 const state = {
   currentUser: null,
 
+    /* =====================================================
+     TeacherPR Scoped Student Master
+     ===================================================== */
+
+  teacherStudentMasterBySid:
+    new Map(),
+
+  teacherStudentMasterById:
+    new Map(),
+
+  teacherStudentMasterLoadedAt:
+    null,
+
   teacherSessionToken: null,
   teacherSessionExpiresAt: null,
 
@@ -15610,6 +15623,820 @@ midtermMax: {
       const n = Number(v);
       return Number.isNaN(n) ? null : n;
     }
+
+    /* =========================================================
+   TeacherPR — Scoped Student Master
+   students = แหล่งข้อมูลตัวตนนักเรียนหลัก
+   ========================================================= */
+
+
+/*
+ * Normalize SID
+ * รองรับค่าที่มาจาก Excel เช่น 25090.0
+ */
+function teacherNormalizeStudentSid(
+  value
+){
+
+  return String(
+    value ?? ''
+  )
+    .replace(
+      /\.0$/,
+      ''
+    )
+    .trim();
+
+}
+
+
+/*
+ * คำนวณชั้นของนักเรียน
+ * จากปีแรกเข้า + ระดับแรกเข้า
+ *
+ * ม.1 → ม.1 → ม.2 → ม.3
+ * ม.4 → ม.4 → ม.5 → ม.6
+ */
+function teacherGetStudentClassLevel(
+  student,
+  academicYear
+){
+
+  if(!student){
+    return null;
+  }
+
+
+  const entryYear =
+    safeNum(
+      student.entry_academic_year
+    );
+
+
+  const targetYear =
+    safeNum(
+      academicYear
+    );
+
+
+  const entryLevel =
+    safeText(
+      student.entry_level,
+      ''
+    );
+
+
+  if(
+    entryYear === null ||
+    targetYear === null
+  ){
+    return null;
+  }
+
+
+  const diff =
+    targetYear -
+    entryYear;
+
+
+  if(diff < 0){
+    return null;
+  }
+
+
+  /*
+   * ม.ต้น
+   */
+  if(
+    entryLevel === 'ม.1' ||
+    entryLevel === '1'
+  ){
+
+    if(
+      diff < 0 ||
+      diff > 2
+    ){
+      return null;
+    }
+
+    return `ม.${1 + diff}`;
+
+  }
+
+
+  /*
+   * ม.ปลาย
+   */
+  if(
+    entryLevel === 'ม.4' ||
+    entryLevel === '4'
+  ){
+
+    if(
+      diff < 0 ||
+      diff > 2
+    ){
+      return null;
+    }
+
+    return `ม.${4 + diff}`;
+
+  }
+
+
+  return null;
+
+}
+
+
+/*
+ * Student Status
+ *
+ * หมายเหตุ:
+ * student_status = สถานะนักเรียน
+ * is_active      = สถานะบัญชี
+ *
+ * ห้ามใช้ is_active แทนสถานะลาออก
+ */
+function teacherIsCurrentStudent(
+  student
+){
+
+  return (
+    safeText(
+      student?.student_status,
+      ''
+    ) === 'เรียนอยู่'
+  );
+
+}
+
+
+/*
+ * เอาข้อมูลที่โหลดมา Merge เข้า Cache กลาง
+ *
+ * ไม่ clear map เพราะ TeacherPR โหลดเป็น scope
+ * เช่น โหลดทีละห้อง / ทีละกลุ่ม SID
+ */
+function mergeTeacherStudentMasterRows(
+  rows
+){
+
+  (rows || [])
+    .forEach(student => {
+
+      const sid =
+        teacherNormalizeStudentSid(
+          student?.sid
+        );
+
+
+      const id =
+        safeText(
+          student?.id,
+          ''
+        );
+
+
+      if(sid){
+
+        state
+          .teacherStudentMasterBySid
+          .set(
+            sid,
+            student
+          );
+
+      }
+
+
+      if(id){
+
+        state
+          .teacherStudentMasterById
+          .set(
+            id,
+            student
+          );
+
+      }
+
+    });
+
+
+  state.teacherStudentMasterLoadedAt =
+    new Date();
+
+
+  return rows || [];
+
+}
+
+
+/*
+ * หา Student Master ด้วย SID
+ */
+function getTeacherStudentMasterBySid(
+  sid
+){
+
+  const code =
+    teacherNormalizeStudentSid(
+      sid
+    );
+
+
+  if(!code){
+    return null;
+  }
+
+
+  return (
+    state
+      .teacherStudentMasterBySid
+      ?.get(code) ||
+    null
+  );
+
+}
+
+
+/*
+ * หา Student Master ด้วย student_id
+ */
+function getTeacherStudentMasterById(
+  studentId
+){
+
+  const id =
+    safeText(
+      studentId,
+      ''
+    );
+
+
+  if(!id){
+    return null;
+  }
+
+
+  return (
+    state
+      .teacherStudentMasterById
+      ?.get(id) ||
+    null
+  );
+
+}
+
+
+/*
+ * คืนรูปแบบมาตรฐานสำหรับใช้ทุกหน้า
+ */
+function getTeacherStudentMasterInfo(
+  sid,
+  academicYear = null
+){
+
+  const student =
+    getTeacherStudentMasterBySid(
+      sid
+    );
+
+
+  if(!student){
+    return null;
+  }
+
+
+  return {
+
+    id:
+      student.id ||
+      null,
+
+    sid:
+      teacherNormalizeStudentSid(
+        student.sid
+      ),
+
+    student_name:
+      safeText(
+        student.raw_full_name,
+        ''
+      ),
+
+    class_level:
+      academicYear
+        ? teacherGetStudentClassLevel(
+            student,
+            academicYear
+          )
+        : null,
+
+    room:
+      safeText(
+        student.current_room,
+        ''
+      ),
+
+    student_no:
+      safeNum(
+        student.current_no
+      ),
+
+    student_status:
+      safeText(
+        student.student_status,
+        ''
+      ),
+
+    resigned_date:
+      student.resigned_date ||
+      null,
+
+    is_active:
+      student.is_active !== false,
+
+    source:
+      student
+
+  };
+
+}
+
+const TEACHER_STUDENT_MASTER_SELECT = `
+  id,
+  sid,
+  raw_full_name,
+  current_room,
+  current_no,
+  entry_academic_year,
+  entry_level,
+  student_status,
+  resigned_date,
+  is_active
+`;
+
+/*
+ * =========================================================
+ * โหลด Student Master เฉพาะชั้น/ห้องที่ต้องการ
+ *
+ * ใช้กับ:
+ * - นักเรียนที่สอน
+ * - กลางภาค
+ * - มส
+ * - ห้องที่ปรึกษา
+ * - ความเสี่ยงกลางภาค
+ * =========================================================
+ */
+async function fetchTeacherStudentMasterForClassRoom(
+  options = {}
+){
+
+  const academicYear =
+    safeNum(
+      options.academicYear
+    );
+
+
+  const classLevel =
+    safeText(
+      options.classLevel,
+      ''
+    );
+
+
+  const room =
+    safeText(
+      options.room,
+      ''
+    );
+
+
+  const includeResigned =
+    options.includeResigned === true;
+
+
+  if(
+    !academicYear ||
+    !classLevel ||
+    !room
+  ){
+
+    return [];
+
+  }
+
+
+  const entryFilter =
+    teacherStudentGetEntryFilterByClassLevel(
+      classLevel,
+      academicYear
+    );
+
+
+  if(!entryFilter){
+
+    return [];
+
+  }
+
+
+  let query =
+    supabaseClient
+      .from('students')
+      .select(
+        TEACHER_STUDENT_MASTER_SELECT
+      )
+      .eq(
+        'current_room',
+        room
+      )
+      .eq(
+        'entry_academic_year',
+        entryFilter.entry_academic_year
+      )
+      .eq(
+        'entry_level',
+        entryFilter.entry_level
+      );
+
+
+  /*
+   * งานปัจจุบัน:
+   * ใช้ student_status เท่านั้น
+   *
+   * ไม่ใช้ is_active เป็นตัวตัดสิน
+   */
+  if(!includeResigned){
+
+    query =
+      query.eq(
+        'student_status',
+        'เรียนอยู่'
+      );
+
+  }
+
+
+  query =
+    query
+      .order(
+        'current_no',
+        {
+          ascending:true
+        }
+      )
+      .order(
+        'raw_full_name',
+        {
+          ascending:true
+        }
+      );
+
+
+  const {
+    data,
+    error
+  } =
+    await query;
+
+
+  if(error){
+    throw error;
+  }
+
+
+  const rows =
+    Array.isArray(data)
+      ? data
+      : [];
+
+
+  mergeTeacherStudentMasterRows(
+    rows
+  );
+
+
+  return rows;
+
+}
+
+/*
+ * =========================================================
+ * โหลด Student Master ตาม SID
+ *
+ * ใช้สำหรับข้อมูลย้อนหลัง เช่น
+ * grade_results / retest / student detail
+ *
+ * ไม่ตัดนักเรียนลาออก
+ * =========================================================
+ */
+async function fetchTeacherStudentMasterBySids(
+  studentCodes
+){
+
+  const codes =
+    [
+      ...new Set(
+        (studentCodes || [])
+          .map(
+            teacherNormalizeStudentSid
+          )
+          .filter(Boolean)
+      )
+    ];
+
+
+  if(!codes.length){
+    return [];
+  }
+
+
+  /*
+   * แบ่งเป็นชุดเล็ก
+   * ป้องกัน query .in() ยาวเกินไป
+   */
+  const chunkSize =
+    200;
+
+
+  const result =
+    [];
+
+
+  for(
+    let i = 0;
+    i < codes.length;
+    i += chunkSize
+  ){
+
+    const chunk =
+      codes.slice(
+        i,
+        i + chunkSize
+      );
+
+
+    const {
+      data,
+      error
+    } =
+      await supabaseClient
+        .from('students')
+        .select(
+          TEACHER_STUDENT_MASTER_SELECT
+        )
+        .in(
+          'sid',
+          chunk
+        );
+
+
+    if(error){
+      throw error;
+    }
+
+
+    result.push(
+      ...(
+        Array.isArray(data)
+          ? data
+          : []
+      )
+    );
+
+  }
+
+
+  mergeTeacherStudentMasterRows(
+    result
+  );
+
+
+  return result;
+
+}
+
+async function fetchTeacherStudentMasterByIds(
+  studentIds
+){
+
+  const ids =
+    [
+      ...new Set(
+        (studentIds || [])
+          .map(
+            id =>
+              safeText(
+                id,
+                ''
+              )
+          )
+          .filter(Boolean)
+      )
+    ];
+
+
+  if(!ids.length){
+    return [];
+  }
+
+
+  const chunkSize =
+    200;
+
+
+  const result =
+    [];
+
+
+  for(
+    let i = 0;
+    i < ids.length;
+    i += chunkSize
+  ){
+
+    const chunk =
+      ids.slice(
+        i,
+        i + chunkSize
+      );
+
+
+    const {
+      data,
+      error
+    } =
+      await supabaseClient
+        .from('students')
+        .select(
+          TEACHER_STUDENT_MASTER_SELECT
+        )
+        .in(
+          'id',
+          chunk
+        );
+
+
+    if(error){
+      throw error;
+    }
+
+
+    result.push(
+      ...(
+        Array.isArray(data)
+          ? data
+          : []
+      )
+    );
+
+  }
+
+
+  mergeTeacherStudentMasterRows(
+    result
+  );
+
+
+  return result;
+
+}
+
+/*
+ * =========================================================
+ * เอา Student Master มาครอบข้อมูลจากตารางอื่น
+ *
+ * ไม่ Update ฐานข้อมูล
+ * เป็น read-time overlay เท่านั้น
+ * =========================================================
+ */
+function enrichTeacherRowWithStudentMaster(
+  row,
+  options = {}
+){
+
+  if(!row){
+    return row;
+  }
+
+
+  const codeField =
+    options.codeField ||
+    'student_code';
+
+
+  const sid =
+    teacherNormalizeStudentSid(
+      row[codeField]
+    );
+
+
+  const academicYear =
+    options.academicYear ??
+    row.academic_year ??
+    null;
+
+
+  const student =
+    getTeacherStudentMasterInfo(
+      sid,
+      academicYear
+    );
+
+
+  if(!student){
+
+    return {
+      ...row,
+      student_master_found:
+        false
+    };
+
+  }
+
+
+  return {
+
+    ...row,
+
+
+    /*
+     * เก็บ snapshot เดิมไว้
+     */
+    history_student_name:
+      row.history_student_name ??
+      row.student_name,
+
+    history_class_level:
+      row.history_class_level ??
+      row.class_level,
+
+    history_room:
+      row.history_room ??
+      row.room,
+
+    history_student_no:
+      row.history_student_no ??
+      row.student_no,
+
+
+    /*
+     * ข้อมูลปัจจุบันจาก students
+     */
+    student_id:
+      student.id ||
+      row.student_id ||
+      null,
+
+    student_code:
+      student.sid ||
+      sid,
+
+    student_name:
+      student.student_name,
+
+    class_level:
+      student.class_level ??
+      row.class_level,
+
+    room:
+      student.room,
+
+    student_no:
+      student.student_no,
+
+    student_status:
+      student.student_status,
+
+    resigned_date:
+      student.resigned_date,
+
+    student_master_found:
+      true
+
+  };
+
+}
+
+
+function enrichTeacherRowsWithStudentMaster(
+  rows,
+  options = {}
+){
+
+  return (rows || [])
+    .map(
+      row =>
+        enrichTeacherRowWithStudentMaster(
+          row,
+          options
+        )
+    );
+
+}
 
     function formatDecimal(value, digits=1){
       const n = Number(value);
@@ -26769,26 +27596,30 @@ async function loadTeacherStudentRows(){
 
     setStatus('teacherStudentStatus', 'กำลังโหลดรายชื่อนักเรียน...', 'info');
 
-    const entryFilter = teacherStudentGetEntryFilterByClassLevel(group.class_level, group.academic_year);
+  /*
+ * =====================================================
+ * โหลดนักเรียนปัจจุบันจาก Scoped Student Master
+ *
+ * งานปัจจุบัน:
+ * - ใช้ student_status = เรียนอยู่
+ * - ไม่ใช้ is_active เป็นสถานะนักเรียน
+ * =====================================================
+ */
 
-    let query = supabaseClient
-      .from('students')
-      .select('id, sid, raw_full_name, current_room, current_no, entry_academic_year, entry_level, is_active')
-      .eq('is_active', true)
-      .eq('current_room', room)
-      .order('current_no', { ascending:true })
-      .order('raw_full_name', { ascending:true });
+let students =
+  await fetchTeacherStudentMasterForClassRoom({
+    academicYear:
+      group.academic_year,
 
-    if(entryFilter){
-      query = query
-        .eq('entry_academic_year', entryFilter.entry_academic_year)
-        .eq('entry_level', entryFilter.entry_level);
-    }
+    classLevel:
+      group.class_level,
 
-    const { data, error } = await query;
-    if(error) throw error;
+    room:
+      room,
 
-    let students = Array.isArray(data) ? data : [];
+    includeResigned:
+      false
+  });
 
     if(keyword){
       students = students.filter(student => {
@@ -31698,70 +32529,39 @@ function renderMidtermRosterTables(){
  * และรายชื่อเดิมจาก midterm_reports
  */
 async function loadMidtermRosterData(group){
-  const currentRoom =
-    String(group?.room || '')
-      .trim();
 
-  const entryFilter =
-    teacherStudentGetEntryFilterByClassLevel(
-      group?.class_level,
-      group?.academic_year
-    );
+  const currentRoom =
+    String(
+      group?.room || ''
+    ).trim();
 
 
   /*
-   * โหลดนักเรียนทั้งหมดในห้อง
+   * =====================================================
+   * โหลดรายชื่อนักเรียนปัจจุบันจาก Student Master
+   *
+   * รายชื่อกลางภาคเป็นงานปัจจุบัน
+   * จึงไม่รวมนักเรียนที่ลาออก
+   * =====================================================
    */
-  let studentQuery =
-    supabaseClient
-      .from('students')
-      .select(`
-        id,
-        sid,
-        current_room,
-        current_no,
-        raw_full_name,
-        entry_academic_year,
-        entry_level,
-        is_active
-      `)
-      .eq('is_active', true)
-      .eq('current_room', currentRoom)
-      .order(
-        'current_no',
-        {
-          ascending: true
-        }
-      )
-      .order(
-        'raw_full_name',
-        {
-          ascending: true
-        }
-      );
 
-  if(entryFilter){
-    studentQuery =
-      studentQuery
-        .eq(
-          'entry_academic_year',
-          entryFilter.entry_academic_year
-        )
-        .eq(
-          'entry_level',
-          entryFilter.entry_level
-        );
-  }
+  const students =
+    await fetchTeacherStudentMasterForClassRoom({
 
+      academicYear:
+        group?.academic_year,
 
-  const {
-    data: students,
-    error: studentsError
-  } = await studentQuery;
+      classLevel:
+        group?.class_level,
 
-  if(studentsError){
-    throw studentsError;
-  }
+      room:
+        currentRoom,
+
+      includeResigned:
+        false
+
+    });
+
 
 
   /*
@@ -31878,40 +32678,93 @@ const isManagingCurrentGroup =
  * ทำให้รายชื่อที่เลือกไว้แต่ยังไม่บันทึก
  * ยังคงอยู่ในตารางขวา
  */
+/*
+ * =====================================================
+ * ตารางขวา = นักเรียนปัจจุบันเท่านั้น
+ *
+ * midterm_reports เดิมยังคงอยู่ในฐานข้อมูล
+ * แต่ถ้านักเรียนลาออก / ย้ายห้องแล้ว
+ * จะไม่ถูกนำกลับมาแสดงใน roster ปัจจุบัน
+ * =====================================================
+ */
+
 const selectedStudents =
   isManagingCurrentGroup
-    ? state.midtermRows
-        .map(row => ({
-          ...row,
 
-          student_code:
+    ? state.midtermRows
+
+        .map(row => {
+
+          const studentCode =
             normalizeMidtermRosterStudentCode(
               row.student_code
-            )
-        }))
-        .filter(row =>
-          row.student_code
-        )
+            );
+
+
+          const student =
+            studentMap.get(
+              studentCode
+            ) ||
+            null;
+
+
+          /*
+           * ไม่พบใน Student Master scope ปัจจุบัน
+           * เช่น ลาออก / ย้ายห้อง
+           */
+          if(!student){
+            return null;
+          }
+
+
+          /*
+           * ใช้คะแนนเดิม
+           * แต่ชื่อ/เลขที่ล่าสุดจาก students
+           */
+          return createMidtermRosterStudentFromReport(
+            row,
+            student
+          );
+
+        })
+
+        .filter(Boolean)
+
 
     : (oldReports || [])
+
         .map(report => {
+
           const studentCode =
             normalizeMidtermRosterStudentCode(
               report.student_code
             );
 
+
           const student =
-            studentMap.get(studentCode) ||
+            studentMap.get(
+              studentCode
+            ) ||
             null;
+
+
+          /*
+           * ถ้าลาออกหรือไม่ใช่นักเรียนห้องนี้แล้ว
+           * ไม่แสดงในงานปัจจุบัน
+           */
+          if(!student){
+            return null;
+          }
+
 
           return createMidtermRosterStudentFromReport(
             report,
             student
           );
+
         })
-        .filter(row =>
-          row.student_code
-        );
+
+        .filter(Boolean);
 
 
   state.midtermRosterAllStudents =
@@ -31930,16 +32783,40 @@ const selectedStudents =
  * นักเรียนที่เลือกไว้ในหน้าจอแต่ยังไม่ได้บันทึก
  * จะยังถูกตรวจว่าเป็นข้อมูลค้างบันทึก
  */
+/*
+ * =====================================================
+ * Original codes สำหรับ "การจัดการ roster ปัจจุบัน"
+ *
+ * นับเฉพาะนักเรียนที่ยังอยู่ใน Student Master scope นี้
+ *
+ * นักเรียนลาออก / ย้ายห้อง:
+ * - ไม่แสดง
+ * - ไม่ถูก mark ว่าต้องลบ
+ * - midterm_reports เดิมยังคงเป็นประวัติ
+ * =====================================================
+ */
+
 state.midtermRosterOriginalStudentCodes =
   [
     ...new Set(
+
       (oldReports || [])
+
         .map(report =>
           normalizeMidtermRosterStudentCode(
             report.student_code
           )
         )
-        .filter(Boolean)
+
+        .filter(studentCode =>
+          Boolean(
+            studentCode &&
+            studentMap.has(
+              studentCode
+            )
+          )
+        )
+
     )
   ];
 
@@ -35196,6 +36073,8 @@ openMidtermScoreOverlay();
       [];
 
 
+
+
     /*
      * กรณีข้อมูลถูกลบหลังจากโหลดรายการสอนแล้ว
      */
@@ -35215,6 +36094,20 @@ openMidtermScoreOverlay();
 
       return;
     }
+
+    /*
+ * =====================================================
+ * โหลด Student Master ของนักเรียนในรายงานเดิม
+ * =====================================================
+ */
+
+await fetchTeacherStudentMasterBySids(
+
+  reportRows.map(report =>
+    report.student_code
+  )
+
+);
 
 
     /*
@@ -35249,29 +36142,106 @@ openMidtermScoreOverlay();
     /*
      * สร้างตารางคะแนนจาก midterm_reports เท่านั้น
      */
-    state.midtermRows =
-      sortMidtermRosterStudents(
-        reportRows.map(report => ({
+/*
+ * =====================================================
+ * ตารางคะแนน
+ *
+ * คะแนน         → midterm_reports เดิม
+ * ชื่อ/เลขที่    → Student Master ล่าสุด
+ *
+ * นักเรียนลาออก:
+ * ยังไม่ลบข้อมูลเดิมจากฐานข้อมูล
+ * แต่ไม่แสดงในงานกลางภาคปัจจุบัน
+ * =====================================================
+ */
+
+state.midtermRows =
+  sortMidtermRosterStudents(
+
+    reportRows
+
+      .map(report => {
+
+        const studentCode =
+          normalizeMidtermRosterStudentCode(
+            report.student_code
+          );
+
+
+        const student =
+          getTeacherStudentMasterBySid(
+            studentCode
+          );
+
+
+        /*
+         * ต้องเป็นนักเรียนปัจจุบัน
+         */
+        if(
+          !student ||
+          !teacherIsCurrentStudent(
+            student
+          )
+        ){
+          return null;
+        }
+
+
+        /*
+         * ต้องยังอยู่ชั้น/ห้องนี้
+         */
+        const studentInfo =
+          getTeacherStudentMasterInfo(
+            studentCode,
+            group.academic_year
+          );
+
+
+        if(
+          !studentInfo ||
+          String(
+            studentInfo.class_level || ''
+          ) !==
+          String(
+            group.class_level || ''
+          ) ||
+          String(
+            studentInfo.room || ''
+          ) !==
+          String(
+            group.room || ''
+          )
+        ){
+          return null;
+        }
+
+
+        return {
+
           student_id:
+            student.id ||
             report.student_id ||
             null,
 
           student_code:
-            normalizeMidtermRosterStudentCode(
-              report.student_code
-            ),
+            studentCode,
 
           student_no:
             safeNum(
-              report.student_no
+              student.current_no
             ),
 
           student_name:
             safeText(
-              report.student_name,
+              student.raw_full_name,
+              report.student_name ||
               '-'
             ),
 
+
+          /*
+           * คะแนนเดิม
+           */
           keep_score:
             report.keep_score ??
             '',
@@ -35301,8 +36271,14 @@ openMidtermScoreOverlay();
               report.attendance_percent ||
               0
             )
-        }))
-      );
+
+        };
+
+      })
+
+      .filter(Boolean)
+
+  );
 
 
 /*
